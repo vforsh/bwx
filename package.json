@@ -1,0 +1,24 @@
+{
+  "name": "@vforsh/bwx",
+  "version": "0.1.0",
+  "type": "module",
+  "bin": {
+    "bwx": "bin/bwx"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "bun test",
+    "cmd": "bun run bin/bwx"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "commander": "^14.0.3",
+    "picocolors": "^1.1.1",
+    "zod": "^4.3.6"
+  }
+}
