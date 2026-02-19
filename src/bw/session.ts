@@ -10,6 +10,7 @@ import {
 	type BwResult,
 } from "./runner.ts";
 import { BwStatusSchema, type BwStatus } from "./types.ts";
+import { loadConfig } from "../config/store.ts";
 
 const SESSION_PATH = `${process.env.HOME}/.config/bwx/session`;
 
@@ -102,10 +103,29 @@ export async function ensureUnlocked(
 	}
 
 	if (status.status === "unauthenticated") {
-		emitLog("Logging in via API key...", opts);
-		const loginResult = await runBw(["login", "--apikey", "--quiet"], {
-			session: null,
-		});
+		const config = await loadConfig();
+		if (!config.email) {
+			throw new CliError(
+				"Email not configured. Run: bwx config email",
+				ExitCode.AuthFailed,
+			);
+		}
+
+		const pw = await getMasterPassword();
+		emitLog("Logging in...", opts);
+		const loginResult = await runBw(
+			[
+				"login",
+				config.email,
+				"--passwordenv",
+				"BW_MASTER_PW",
+				"--quiet",
+			],
+			{
+				session: null,
+				env: { BW_MASTER_PW: pw, BW_NOINTERACTION: "true" },
+			},
+		);
 		if (loginResult.exitCode !== 0) {
 			throw new CliError(
 				`Login failed: ${loginResult.stderr}`,

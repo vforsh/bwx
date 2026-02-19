@@ -2,11 +2,41 @@ import type { Command } from "commander";
 import { getGlobalOpts } from "../program.ts";
 import { emitSuccess } from "../io.ts";
 import { CliError, ExitCode } from "../errors.ts";
+import { loadConfig, saveConfig } from "../../config/store.ts";
 
 export function registerConfig(program: Command): void {
 	const configCmd = program
 		.command("config")
 		.description("Manage bwx configuration");
+
+	configCmd
+		.command("email")
+		.description("Set Bitwarden account email")
+		.argument("[email]", "Account email address")
+		.action(async function (this: Command, email?: string) {
+			const opts = getGlobalOpts(this);
+
+			if (!email) {
+				if (!process.stdin.isTTY) {
+					throw new CliError(
+						"Pass email as argument when piping",
+						ExitCode.BadArgs,
+					);
+				}
+				process.stderr.write("Email: ");
+				email = await readLine();
+			}
+
+			if (!email) {
+				throw new CliError("Email is required", ExitCode.BadArgs);
+			}
+
+			const config = await loadConfig();
+			config.email = email;
+			await saveConfig(config);
+
+			emitSuccess("Email saved", opts);
+		});
 
 	configCmd
 		.command("master-password")

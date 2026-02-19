@@ -5,8 +5,8 @@ import { z } from "zod/v4";
 export const BwStatusSchema = z.object({
 	serverUrl: z.string().nullable(),
 	lastSync: z.string().nullable(),
-	userEmail: z.string().nullable(),
-	userId: z.string().nullable(),
+	userEmail: z.string().nullable().optional(),
+	userId: z.string().nullable().optional(),
 	status: z.enum(["unlocked", "locked", "unauthenticated"]),
 });
 
