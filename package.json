@@ -2,6 +2,10 @@
   "name": "@vforsh/bwx",
   "version": "0.1.0",
   "type": "module",
+  "files": [
+    "bin",
+    "src"
+  ],
   "bin": {
     "bwx": "bin/bwx"
   },
