@@ -2,6 +2,14 @@
   "name": "bwx",
   "version": "0.1.0",
   "type": "module",
+  "keywords": [
+    "bitwarden",
+    "cli",
+    "vault",
+    "secrets",
+    "ai-agents",
+    "bun"
+  ],
   "files": [
     "bin",
     "src"
