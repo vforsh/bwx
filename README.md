@@ -14,8 +14,11 @@ The native `bw` CLI requires interactive prompts and manual session management. 
 ## Install
 
 ```bash
-bun install  # or npm install
-bun link     # makes `bwx` available globally
+# Global install
+bun install -g bwx
+
+# Or run without installing
+bunx bwx doctor
 ```
 
 Requires [Bitwarden CLI](https://bitwarden.com/help/cli/) (`bw`) installed and on PATH.
