@@ -8,7 +8,7 @@ import pc from "picocolors";
 
 export function registerDelete(program: Command): void {
 	program
-		.command("delete")
+		.command("delete").alias("rm")
 		.description("Delete a vault item")
 		.argument("<item>", "Item name or ID")
 		.option("--permanent", "Permanently delete (no trash)")

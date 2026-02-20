@@ -6,7 +6,7 @@ import { loadConfig, saveConfig } from "../../config/store.ts";
 
 export function registerConfig(program: Command): void {
 	const configCmd = program
-		.command("config")
+		.command("config").alias("cfg")
 		.description("Manage bwx configuration");
 
 	configCmd

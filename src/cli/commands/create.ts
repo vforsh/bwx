@@ -13,7 +13,7 @@ function collect(val: string, prev: string[]): string[] {
 
 export function registerCreate(program: Command): void {
 	program
-		.command("create")
+		.command("create").alias("add")
 		.description("Create a new vault item")
 		.option("--type <type>", "Item type: login|note", "note")
 		.option("--name <name>", "Item name")

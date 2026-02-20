@@ -13,7 +13,7 @@ interface Check {
 
 export function registerDoctor(program: Command): void {
 	program
-		.command("doctor")
+		.command("doctor").alias("check")
 		.description("Check if bwx is ready to use")
 		.action(async function (this: Command) {
 			const opts = getGlobalOpts(this);

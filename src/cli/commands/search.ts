@@ -9,7 +9,7 @@ import pc from "picocolors";
 
 export function registerSearch(program: Command): void {
 	program
-		.command("search")
+		.command("search").alias("find")
 		.description("Search vault items")
 		.argument("<query>", "Search query")
 		.option("--type <type>", "Filter by type: login|note|card|identity")
