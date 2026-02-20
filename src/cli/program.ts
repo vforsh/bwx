@@ -1,7 +1,6 @@
 import { Command } from "commander";
 import type { GlobalOptions } from "./types.ts";
 import { registerGet } from "./commands/get.ts";
-import { registerField } from "./commands/field.ts";
 import { registerSearch } from "./commands/search.ts";
 import { registerCreate } from "./commands/create.ts";
 import { registerEdit } from "./commands/edit.ts";
@@ -35,7 +34,6 @@ export function buildProgram(): Command {
 	registerUnlock(program);
 	registerLock(program);
 	registerGet(program);
-	registerField(program);
 	registerSearch(program);
 	registerSync(program);
 	registerCreate(program);
