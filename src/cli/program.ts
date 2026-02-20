@@ -11,6 +11,7 @@ import { registerSync } from "./commands/sync.ts";
 import { registerUnlock } from "./commands/unlock.ts";
 import { registerLock } from "./commands/lock.ts";
 import { registerConfig } from "./commands/config.ts";
+import { registerDoctor } from "./commands/doctor.ts";
 
 export function buildProgram(): Command {
 	const program = new Command();
@@ -40,6 +41,7 @@ export function buildProgram(): Command {
 	registerEdit(program);
 	registerDelete(program);
 	registerConfig(program);
+	registerDoctor(program);
 
 	return program;
 }

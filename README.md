@@ -28,6 +28,9 @@ bwx config email your@email.com
 
 # Store master password in macOS Keychain
 bwx config master-password
+
+# Verify everything is ready
+bwx doctor
 ```
 
 ## Commands
@@ -40,6 +43,7 @@ bwx config master-password
 | `bwx unlock` | Unlock vault & cache session |
 | `bwx lock` | Lock vault & clear session |
 | `bwx sync` | Sync vault from server |
+| `bwx doctor` | Check setup (bw CLI, email, password, config) |
 
 ### Read
 
