@@ -32,9 +32,13 @@ export const BW_TYPE_LABELS: Record<number, string> = {
 
 export const BW_TYPE_FROM_NAME: Record<string, BwItemType> = {
 	login: BwItemType.Login,
+	logins: BwItemType.Login,
 	note: BwItemType.SecureNote,
+	notes: BwItemType.SecureNote,
 	card: BwItemType.Card,
+	cards: BwItemType.Card,
 	identity: BwItemType.Identity,
+	identities: BwItemType.Identity,
 };
 
 // --- Field types ---

@@ -12,12 +12,13 @@ export function registerList(program: Command): void {
 		.command("list")
 		.alias("ls")
 		.description("List all vault items")
-		.option("--type <type>", "Filter by type: login|note|card|identity")
+		.argument("[type]", "Filter by type: logins|notes|cards|identities")
 		.option("--folder <id>", "Filter by folder ID")
 		.option("--limit <n>", "Limit results", parseInt)
 		.action(async function (
 			this: Command,
-			localOpts: { type?: string; folder?: string; limit?: number },
+			type: string | undefined,
+			localOpts: { folder?: string; limit?: number },
 		) {
 			const opts = getGlobalOpts(this);
 
@@ -29,11 +30,11 @@ export function registerList(program: Command): void {
 			const json = await withSession(opts, () => runBwOrThrow(args));
 			let items: Array<Record<string, unknown>> = JSON.parse(json);
 
-			if (localOpts.type) {
-				const typeVal = BW_TYPE_FROM_NAME[localOpts.type];
+			if (type) {
+				const typeVal = BW_TYPE_FROM_NAME[type];
 				if (typeVal === undefined) {
 					throw new CliError(
-						`Invalid type "${localOpts.type}". Valid: login, note, card, identity`,
+						`Invalid type "${type}". Valid: logins, notes, cards, identities`,
 						ExitCode.BadArgs,
 					);
 				}
@@ -55,25 +56,25 @@ export function registerList(program: Command): void {
 
 			if (opts.plain) {
 				for (const item of items) {
-					const type =
+					const t =
 						BW_TYPE_LABELS[item.type as number] ?? `type:${item.type}`;
 					const login = item.login as Record<string, unknown> | null;
 					const username = login?.username ?? "-";
 					process.stdout.write(
-						`${item.id}\t${type}\t${item.name}\t${username}\n`,
+						`${item.id}\t${t}\t${item.name}\t${username}\n`,
 					);
 				}
 				return;
 			}
 
 			for (const item of items) {
-				const type =
+				const t =
 					BW_TYPE_LABELS[item.type as number] ?? `type:${item.type}`;
 				const login = item.login as Record<string, unknown> | null;
 				const username = login?.username ?? "";
 				const userPart = username ? pc.dim(` (${username})`) : "";
 				process.stdout.write(
-					`${pc.dim(item.id as string)}  ${pc.cyan(type)}  ${item.name}${userPart}\n`,
+					`${pc.dim(item.id as string)}  ${pc.cyan(t)}  ${item.name}${userPart}\n`,
 				);
 			}
 		});
