@@ -20,7 +20,7 @@ export function buildProgram(): Command {
 	program
 		.name("bwx")
 		.description("Bitwarden Extended CLI")
-		.version("0.1.0")
+		.version("0.2.0")
 		.option("--json", "JSON output")
 		.option("--plain", "Plain parseable output")
 		.option("-q, --quiet", "Suppress log output")
