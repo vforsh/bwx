@@ -1,8 +1,12 @@
 import type { Command } from "commander";
 import { getGlobalOpts } from "../program.ts";
-import { emitSuccess } from "../io.ts";
+import { emitData, emitSuccess } from "../io.ts";
 import { CliError, ExitCode } from "../errors.ts";
-import { loadConfig, saveConfig } from "../../config/store.ts";
+import {
+	getConfigPath,
+	loadConfig,
+	saveConfig,
+} from "../../config/store.ts";
 
 export function registerConfig(program: Command): void {
 	const configCmd = program
@@ -90,6 +94,72 @@ export function registerConfig(program: Command): void {
 
 			emitSuccess("Master password saved to Keychain", opts);
 		});
+
+	configCmd
+		.command("list").alias("ls")
+		.description("Show config file path and redacted content")
+		.action(async function (this: Command) {
+			const opts = getGlobalOpts(this);
+			const path = getConfigPath();
+			const file = Bun.file(path);
+			const exists = await file.exists();
+			let config: unknown = null;
+
+			if (exists) {
+				try {
+					config = JSON.parse(await file.text());
+				} catch (err) {
+					throw new CliError(
+						`Config file is not valid JSON: ${
+							err instanceof Error ? err.message : String(err)
+						}`,
+						ExitCode.Config,
+					);
+				}
+			}
+
+			emitData(
+				{
+					path,
+					exists,
+					config: redactSensitive(config),
+				},
+				opts,
+			);
+		});
+}
+
+const SENSITIVE_KEY_RE = [
+	/pass(word)?/i,
+	/secret/i,
+	/token/i,
+	/api[-_]?key/i,
+	/private/i,
+	/credential/i,
+	/session/i,
+	/auth/i,
+	/totp/i,
+];
+
+function redactSensitive(value: unknown): unknown {
+	if (!value || typeof value !== "object") {
+		return value;
+	}
+
+	if (Array.isArray(value)) {
+		return value.map((item) => redactSensitive(item));
+	}
+
+	const out: Record<string, unknown> = {};
+	for (const [key, current] of Object.entries(value)) {
+		out[key] = isSensitiveKey(key) ? "***REDACTED***" : redactSensitive(current);
+	}
+
+	return out;
+}
+
+function isSensitiveKey(key: string): boolean {
+	return SENSITIVE_KEY_RE.some((pattern) => pattern.test(key));
 }
 
 async function readLine(): Promise<string> {

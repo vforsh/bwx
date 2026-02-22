@@ -69,6 +69,7 @@ bwx delete "Test Note" --permanent  # no trash
 | `bwx status` | Vault state (no auto-unlock) |
 | `bwx sync` | Force vault sync |
 | `bwx unlock` / `bwx lock` | Manual session control |
+| `bwx config list` / `bwx cfg ls` | Show config path + redacted content |
 | `bwx config master-password` | Set/update master password in Keychain |
 
 ## Global flags

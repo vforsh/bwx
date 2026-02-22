@@ -4,6 +4,10 @@ const CONFIG_DIR =
 	process.env.XDG_CONFIG_HOME ?? `${process.env.HOME}/.config`;
 const CONFIG_PATH = `${CONFIG_DIR}/bwx/config.json`;
 
+export function getConfigPath(): string {
+	return CONFIG_PATH;
+}
+
 export async function loadConfig(): Promise<Config> {
 	try {
 		const text = await Bun.file(CONFIG_PATH).text();

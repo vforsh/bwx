@@ -70,6 +70,7 @@ bwx doctor
 |---------|-------------|
 | `bwx config email [addr]` | Set account email |
 | `bwx config master-password` | Store master password in Keychain |
+| `bwx config list` / `bwx cfg ls` | Show config path + redacted content |
 
 ### Global flags
 

@@ -7,6 +7,12 @@ import type { GlobalOptions } from "./cli/types.ts";
 export async function main(argv: string[]): Promise<void> {
 	const program = buildProgram();
 
+	// Bare invocation should show top-level help.
+	if (argv.length <= 2) {
+		program.outputHelp();
+		return;
+	}
+
 	// Parse global opts early for error formatting
 	let opts: GlobalOptions = {};
 	try {
@@ -26,6 +32,22 @@ export async function main(argv: string[]): Promise<void> {
 		await program.parseAsync(argv);
 	} catch (err) {
 		if (err instanceof CommanderError) {
+			if (err.code === "commander.help") {
+				const helpArgv = [...argv, "--help"];
+				try {
+					await program.parseAsync(helpArgv);
+				} catch (helpErr) {
+					if (
+						!(
+							helpErr instanceof CommanderError &&
+							helpErr.code === "commander.helpDisplayed"
+						)
+					) {
+						throw helpErr;
+					}
+				}
+				process.exit(err.exitCode);
+			}
 			if (err.exitCode === 0) process.exit(0); // --help, --version
 			// Commander prefixes messages with "error: " — strip it
 			const msg = err.message.replace(/^error:\s*/i, "");
