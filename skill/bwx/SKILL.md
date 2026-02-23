@@ -11,7 +11,7 @@ Extended Bitwarden CLI. Wraps `bw` with auto-unlock, session caching, and struct
 
 ```bash
 bwx get password "GitHub"               # retrieve a password (auto-unlocks)
-bwx get totp "AWS (vlad@robowhale.com)" # TOTP code
+bwx get totp "AWS (user@example.com)"   # TOTP code
 bwx get username "GitHub"               # username
 bwx get notes "Deploy key"              # secure note content
 bwx get uri "GitHub"                    # first URI
