@@ -2,6 +2,16 @@
 
 Bitwarden CLI wrapper for AI agents. Auto-unlock, session caching, structured output.
 
+> Currently macOS-only: `bwx` uses macOS Keychain for secure master password storage.
+
+## Platform support
+
+- ✅ macOS
+- ❌ Linux (not supported yet)
+- ❌ Windows (not supported yet)
+
+`bwx` relies on macOS Keychain for secure master-password storage and retrieval.
+
 ## Why
 
 The native `bw` CLI requires interactive prompts and manual session management. `bwx` wraps it with:
