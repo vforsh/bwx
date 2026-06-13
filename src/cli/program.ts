@@ -12,6 +12,7 @@ import { registerLock } from "./commands/lock.ts";
 import { registerConfig } from "./commands/config.ts";
 import { registerDoctor } from "./commands/doctor.ts";
 import { registerList } from "./commands/list.ts";
+import { registerAttach } from "./commands/attach.ts";
 
 export function buildProgram(): Command {
 	const program = new Command();
@@ -39,6 +40,7 @@ export function buildProgram(): Command {
 	registerCreate(program);
 	registerEdit(program);
 	registerDelete(program);
+	registerAttach(program);
 	registerList(program);
 	registerConfig(program);
 	registerDoctor(program);

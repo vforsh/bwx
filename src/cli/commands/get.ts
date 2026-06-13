@@ -24,6 +24,16 @@ export function registerGet(program: Command): void {
 				await getCustomField(field, item, opts);
 			}
 		});
+
+	program
+		.command("field")
+		.description("Get a custom field from a vault item")
+		.argument("<item>", "Item name or ID")
+		.argument("<name>", "Custom field name")
+		.action(async function (this: Command, item: string, name: string) {
+			const opts = getGlobalOpts(this);
+			await getCustomField(name, item, opts);
+		});
 }
 
 async function getBuiltinField(

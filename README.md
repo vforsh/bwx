@@ -65,13 +65,15 @@ bwx doctor
 | `bwx get <field> <item>` | Get field (`password`, `username`, `totp`, `notes`, `uri`, `item`) |
 | `bwx field <item> <name>` | Get custom field by name |
 | `bwx search <query>` | Search items (`--type`, `--folder`, `--limit`) |
+| `bwx attach list <item>` | List attachments for an item |
+| `bwx attach get <item> <attachment>` | Download attachment by ID or filename |
 
 ### Write
 
 | Command | Description |
 |---------|-------------|
-| `bwx create` | Create item (`--type`, `--name`, `--username`, `--password`, `--uri`, `--field k=v`) |
-| `bwx edit <item>` | Edit item (`--name`, `--password`, `--add-field k=v`, `--rm-field name`) |
+| `bwx create` | Create item (`--type`, `--name`, `--username`, `--password-stdin`, `--field-file k=path`) |
+| `bwx edit <item>` | Edit item (`--name`, `--password-env`, `--add-field-file k=path`, `--rm-field name`) |
 | `bwx delete <item>` | Delete item (`--permanent`, `--force`) |
 
 ### Config
@@ -81,6 +83,35 @@ bwx doctor
 | `bwx config email [addr]` | Set account email |
 | `bwx config master-password` | Store master password in Keychain |
 | `bwx config list` / `bwx cfg ls` | Show config path + redacted content |
+
+### Attachments
+
+```bash
+bwx attach list "Apple Developer"
+bwx attach get "Apple Developer" "AuthKey.p8"
+bwx attach get "Apple Developer" "AuthKey.p8" --output ./secrets/
+```
+
+Aliases: `attach`, `attachment`, `attachments`; `list` also has `ls`.
+
+### Safe input
+
+Prefer stdin, files, or environment variables for secrets so values do not land in shell history.
+
+```bash
+printf '%s' "$TOKEN" | bwx create --type login --name "GitHub" --username user --password-stdin
+bwx edit "GitHub" --password-env GITHUB_TOKEN
+bwx create --name "Deploy key" --notes-file ./deploy-key.txt
+bwx create --name "Acme" --field-file '!API Key=./token.txt' --field-env account=ACME_ACCOUNT
+```
+
+Supported source flags:
+
+- Passwords: `--password-stdin`, `--password-file <path>`, `--password-env <name>`
+- Notes: `--notes-file <path>`
+- Create fields: `--field-file k=path`, `--field-env k=ENV`
+- Edit fields: `--add-field-file k=path`, `--add-field-env k=ENV`
+- Use `-` as the file path to read that source from stdin.
 
 ### Global flags
 
@@ -93,7 +124,7 @@ bwx doctor
 
 ## Custom fields
 
-Field syntax for `--field` / `--add-field`:
+Field syntax for `--field`, `--field-file`, `--field-env`, and edit variants:
 
 - `key=value` — text field
 - `!key=value` — hidden field
