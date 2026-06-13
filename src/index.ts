@@ -14,19 +14,7 @@ export async function main(argv: string[]): Promise<void> {
 	}
 
 	// Parse global opts early for error formatting
-	let opts: GlobalOptions = {};
-	try {
-		program.parseOptions(argv.slice(2));
-		const rawOpts = program.opts();
-		opts = {
-			json: rawOpts.json ?? false,
-			plain: rawOpts.plain ?? false,
-			quiet: rawOpts.quiet ?? false,
-			verbose: rawOpts.verbose ?? false,
-		};
-	} catch {
-		// Fall through — full parse below will handle
-	}
+	const opts = parseGlobalOpts(argv.slice(2));
 
 	try {
 		await program.parseAsync(argv);
@@ -55,4 +43,13 @@ export async function main(argv: string[]): Promise<void> {
 		}
 		handleFatalError(err, opts);
 	}
+}
+
+function parseGlobalOpts(args: string[]): GlobalOptions {
+	return {
+		json: args.includes("--json"),
+		plain: args.includes("--plain"),
+		quiet: args.includes("-q") || args.includes("--quiet"),
+		verbose: args.includes("-v") || args.includes("--verbose"),
+	};
 }
