@@ -34,8 +34,14 @@ export function emitSuccess(message: string, opts: GlobalOptions): void {
 	process.stderr.write(pc.green("✓") + " " + message + "\n");
 }
 
+/**
+ * Warnings say the returned data may be wrong (stale vault, rejected session
+ * cache), so unlike logs they survive `--json` — the machine-readable callers are
+ * the ones that most need to hear it. Still stderr-only, so stdout stays
+ * parseable; `-q` is the way to silence them.
+ */
 export function emitWarn(message: string, opts: GlobalOptions): void {
-	if (opts.quiet || opts.json) return;
+	if (opts.quiet) return;
 	process.stderr.write(pc.yellow("⚠") + " " + message + "\n");
 }
 

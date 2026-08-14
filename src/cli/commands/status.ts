@@ -1,8 +1,8 @@
 import type { Command } from "commander";
 import { getGlobalOpts } from "../program.ts";
 import { emitData } from "../io.ts";
-import { getStatus } from "../../bw/session.ts";
-import { BW_TYPE_LABELS } from "../../bw/types.ts";
+import { recordStatus } from "../../bw/freshness.ts";
+import { getStatus } from "../../bw/status.ts";
 import pc from "picocolors";
 
 export function registerStatus(program: Command): void {
@@ -12,6 +12,8 @@ export function registerStatus(program: Command): void {
 		.action(async function (this: Command) {
 			const opts = getGlobalOpts(this);
 			const status = await getStatus();
+			// Reads reuse this for their staleness check instead of paying for `bw status`.
+			recordStatus(status);
 
 			if (opts.json || opts.plain) {
 				emitData(status, opts);

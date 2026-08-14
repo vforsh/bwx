@@ -1,55 +1,38 @@
+import { unlinkSync } from "node:fs";
 import { CliError, ExitCode } from "../cli/errors.ts";
 import type { GlobalOptions } from "../cli/types.ts";
-import { emitLog } from "../cli/io.ts";
-import {
-	runBw,
-	runBwOrThrow,
-	setSession,
-	getSession,
-	isAuthError,
-	type BwResult,
-} from "./runner.ts";
-import { BwStatusSchema, type BwStatus } from "./types.ts";
+import { emitLog, emitWarn } from "../cli/io.ts";
+import { SESSION_FILE } from "../config/paths.ts";
+import { readPrivateFile, writePrivateFile } from "../config/secure-file.ts";
+import { runBw, runBwOrThrow, setSession, getSession } from "./runner.ts";
+import { checkVaultFreshness } from "./freshness.ts";
+import { getStatus } from "./status.ts";
+import { BwStatusSchema } from "./types.ts";
 import { loadConfig } from "../config/store.ts";
 
-const SESSION_PATH = `${process.env.HOME}/.config/bwx/session`;
-
-async function loadCachedSession(): Promise<string | null> {
-	try {
-		const token = await Bun.file(SESSION_PATH).text();
-		return token.trim() || null;
-	} catch {
+/**
+ * Loads the cached session, ignoring a cache file that another user could have
+ * planted or read. Rejection is not fatal: the caller just unlocks again.
+ */
+function loadCachedSession(opts: GlobalOptions): string | null {
+	const read = readPrivateFile(SESSION_FILE);
+	if (read.kind === "rejected") {
+		emitWarn(`Ignoring cached session: ${read.reason}`, opts);
 		return null;
 	}
+	if (read.kind === "missing") return null;
+	return read.text.trim() || null;
 }
 
-async function saveCachedSession(token: string): Promise<void> {
-	const dir = SESSION_PATH.replace(/\/[^/]+$/, "");
-	const { mkdirSync } = await import("node:fs");
-	mkdirSync(dir, { recursive: true });
-	await Bun.write(SESSION_PATH, token);
-	const proc = Bun.spawn(["chmod", "600", SESSION_PATH]);
-	await proc.exited;
+function saveCachedSession(token: string): void {
+	writePrivateFile(SESSION_FILE, token);
 }
 
-async function clearCachedSession(): Promise<void> {
+function clearCachedSession(): void {
 	try {
-		const { unlinkSync } = await import("node:fs");
-		unlinkSync(SESSION_PATH);
+		unlinkSync(SESSION_FILE);
 	} catch {
 		// Already gone
-	}
-}
-
-export async function getStatus(): Promise<BwStatus> {
-	const result = await runBw(["status"], { session: null });
-	try {
-		return BwStatusSchema.parse(JSON.parse(result.stdout));
-	} catch {
-		throw new CliError(
-			`Failed to parse bw status: ${result.stdout}`,
-			ExitCode.BwError,
-		);
 	}
 }
 
@@ -77,11 +60,9 @@ async function getMasterPassword(): Promise<string> {
 	return pw;
 }
 
-export async function ensureUnlocked(
-	opts: GlobalOptions,
-): Promise<void> {
+export async function ensureUnlocked(opts: GlobalOptions): Promise<void> {
 	// Try cached session first
-	const cached = getSession() || (await loadCachedSession());
+	const cached = getSession() || loadCachedSession(opts);
 	if (cached) {
 		setSession(cached);
 		// Quick check — try a lightweight command
@@ -114,17 +95,9 @@ export async function ensureUnlocked(
 		const pw = await getMasterPassword();
 		emitLog("Logging in...", opts);
 		const loginResult = await runBw(
-			[
-				"login",
-				config.email,
-				"--passwordenv",
-				"BW_MASTER_PW",
-				"--quiet",
-			],
-			{
-				session: null,
-				env: { BW_MASTER_PW: pw, BW_NOINTERACTION: "true" },
-			},
+			["login", config.email, "--passwordenv", "BW_MASTER_PW", "--quiet"],
+			// BW_NOINTERACTION is set for every bw call by the runner.
+			{ session: null, env: { BW_MASTER_PW: pw } },
 		);
 		if (loginResult.exitCode !== 0) {
 			throw new CliError(
@@ -150,35 +123,57 @@ export async function ensureUnlocked(
 
 	const token = unlockResult.stdout;
 	setSession(token);
-	await saveCachedSession(token);
+	saveCachedSession(token);
 }
 
 export async function lockVault(): Promise<void> {
 	await runBw(["lock"], { session: null });
 	setSession(null);
-	await clearCachedSession();
+	clearCachedSession();
+}
+
+interface SessionOptions {
+	/**
+	 * Skips the stale-vault check. Set by operations that own vault freshness
+	 * themselves (`sync`) to avoid recursion.
+	 */
+	skipFreshnessCheck?: boolean;
 }
 
 export async function withSession<T>(
 	opts: GlobalOptions,
 	fn: () => Promise<T>,
+	options?: SessionOptions,
 ): Promise<T> {
 	// Try with current/cached session
-	const cached = getSession() || (await loadCachedSession());
+	const cached = getSession() || loadCachedSession(opts);
 	if (cached) {
 		setSession(cached);
 	}
 
+	if (!options?.skipFreshnessCheck) {
+		await checkVaultFreshness(opts, () => syncVault(opts));
+	}
+
+	return withAuthRetry(opts, fn);
+}
+
+async function syncVault(opts: GlobalOptions): Promise<void> {
+	await withAuthRetry(opts, () => runBwOrThrow(["sync"]));
+}
+
+/** Runs `fn`, re-authenticating once if the cached session turned out to be stale. */
+async function withAuthRetry<T>(
+	opts: GlobalOptions,
+	fn: () => Promise<T>,
+): Promise<T> {
 	try {
 		return await fn();
 	} catch (err) {
-		if (
-			err instanceof CliError &&
-			err.exitCode === ExitCode.AuthFailed
-		) {
+		if (err instanceof CliError && err.exitCode === ExitCode.AuthFailed) {
 			// Clear stale session and re-auth
 			setSession(null);
-			await clearCachedSession();
+			clearCachedSession();
 			await ensureUnlocked(opts);
 			return await fn();
 		}
