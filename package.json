@@ -12,7 +12,8 @@
   ],
   "files": [
     "bin",
-    "src"
+    "src",
+    "skill"
   ],
   "bin": {
     "bwx": "bin/bwx"
