@@ -1,16 +1,14 @@
+import { mkdirSync } from "node:fs";
+import { CONFIG_DIR, CONFIG_FILE } from "./paths.ts";
 import { ConfigSchema, type Config } from "./schema.ts";
 
-const CONFIG_DIR =
-	process.env.XDG_CONFIG_HOME ?? `${process.env.HOME}/.config`;
-const CONFIG_PATH = `${CONFIG_DIR}/bwx/config.json`;
-
 export function getConfigPath(): string {
-	return CONFIG_PATH;
+	return CONFIG_FILE;
 }
 
 export async function loadConfig(): Promise<Config> {
 	try {
-		const text = await Bun.file(CONFIG_PATH).text();
+		const text = await Bun.file(CONFIG_FILE).text();
 		return ConfigSchema.parse(JSON.parse(text));
 	} catch {
 		return ConfigSchema.parse({});
@@ -18,8 +16,6 @@ export async function loadConfig(): Promise<Config> {
 }
 
 export async function saveConfig(config: Config): Promise<void> {
-	const dir = CONFIG_PATH.replace(/\/[^/]+$/, "");
-	const { mkdirSync } = await import("node:fs");
-	mkdirSync(dir, { recursive: true });
-	await Bun.write(CONFIG_PATH, JSON.stringify(config, null, 2) + "\n");
+	mkdirSync(CONFIG_DIR, { recursive: true });
+	await Bun.write(CONFIG_FILE, JSON.stringify(config, null, 2) + "\n");
 }

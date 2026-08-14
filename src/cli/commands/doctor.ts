@@ -2,6 +2,7 @@ import type { Command } from "commander";
 import { getGlobalOpts } from "../program.ts";
 import { emitData } from "../io.ts";
 import { loadConfig } from "../../config/store.ts";
+import { CONFIG_DIR } from "../../config/paths.ts";
 import pc from "picocolors";
 
 interface Check {
@@ -140,9 +141,7 @@ async function checkMasterPassword(): Promise<Check> {
 }
 
 async function checkConfigDir(): Promise<Check> {
-	const configDir =
-		process.env.XDG_CONFIG_HOME ?? `${process.env.HOME}/.config`;
-	const dir = `${configDir}/bwx`;
+	const dir = CONFIG_DIR;
 	try {
 		const { accessSync, constants } = await import("node:fs");
 		accessSync(dir, constants.W_OK);
