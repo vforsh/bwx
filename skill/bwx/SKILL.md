@@ -11,7 +11,8 @@ Extended Bitwarden CLI. Wraps `bw` with auto-unlock, session caching, and struct
 
 ```bash
 bwx get password "GitHub"               # retrieve a password (auto-unlocks)
-bwx get totp "AWS (user@example.com)"   # TOTP code
+bwx get totp "AWS (user@example.com)"   # TOTP code (+ seconds left, on stderr)
+bwx get totp "AWS" --fresh              # wait out a nearly-expired code first
 bwx get username "GitHub"               # username
 bwx get notes "Deploy key"              # secure note content
 bwx get uri "GitHub"                    # first URI
@@ -49,6 +50,27 @@ Anything else is looked up as a custom field. Lists available fields on miss.
 A miss suggests near matches; an ambiguous name lists candidates with IDs. Read the
 suggestions instead of retrying variations — the answer is usually in them.
 
+### `bwx get totp <item>`
+
+Codes are computed locally from the stored secret, so a TOTP costs no extra `bw` spawn and
+batches with other fields from the same item.
+
+```bash
+bwx get totp "AWS"                  # code on stdout, "Valid for 17s" on stderr
+bwx get totp "AWS" --json           # { "data": "123456", "meta": { "secondsRemaining", "period" } }
+bwx get totp "AWS" --fresh          # wait for the next window if under 5s remain
+bwx get totp "AWS" --fresh 15       # ...or under 15s
+bwx get totp "AWS" --seed           # the stored secret, for migrating to another app
+```
+
+**Check `secondsRemaining` before using a code.** A `bw` read plus the time to hand the code
+over routinely leaves under 5 seconds, and a code that expires in transit fails the login
+with no useful error. `--fresh` sleeps at most one period and returns a full-window code.
+
+Accepts bare base32 and `otpauth://` URIs, honoring their `period`, `digits`, and
+`algorithm` (SHA1/SHA256/SHA512). `steam://` secrets and anything else bwx cannot compute
+exactly are delegated to `bw get totp` instead of guessed at.
+
 ### `bwx field <name> <item>`
 
 Custom fields only, so an item whose custom field is named `password` is still reachable.
@@ -59,8 +81,13 @@ Takes its arguments in the same order as `get` (this changed in 0.5.0).
 Flags: `--type login|note|card|identity`, `--folder <name|id>`, `--limit <n>`, `--full-items`
 
 Human, `--plain`, and `--json` output all carry the same reduced projection — `id`, `type`,
-`name`, `username` — so listings never leak passwords, notes, or custom fields. `--full-items`
-opts into complete item objects and **does** include secrets; avoid it in logged sessions.
+`name`, `username`, `hasTotp` — so listings never leak passwords, notes, or custom fields.
+`--full-items` opts into complete item objects and **does** include secrets; avoid it in
+logged sessions.
+
+`hasTotp` says whether an item has a TOTP secret, never what it is. Use it to find 2FA items
+(`bwx list --json --limit 0 | jq '.data[]|select(.hasTotp)'`) instead of reaching for
+`--full-items`, which would dump the whole vault in plaintext to answer a boolean.
 
 **Listings stop at 50 items** unless you pass `--limit` (`--limit 0` for all). Truncation is
 reported on stderr and in `meta` on the JSON envelope — check it before concluding a listing
@@ -99,10 +126,10 @@ Downloads an attachment by ID or filename. Defaults to saving as the attachment 
 
 ### `bwx create [options]`
 
-Flags: `--type login|note`, `--name`, `--notes`, `--notes-file`, `--username`, `--password`, `--password-stdin`, `--password-file`, `--password-env`, `--password-generate`, `--generate-length <n>`, `--uri` (repeatable), `--field k=v` (repeatable), `--field-file k=path`, `--field-env k=ENV`, `--folder <name|id>`, `--favorite`, `--from-json`
+Flags: `--type login|note`, `--name`, `--notes`, `--notes-file`, `--username`, `--password`, `--password-stdin`, `--password-file`, `--password-env`, `--password-generate`, `--generate-length <n>`, `--totp`, `--totp-stdin`, `--totp-file`, `--totp-env`, `--uri` (repeatable), `--field k=v` (repeatable), `--field-file k=path`, `--field-env k=ENV`, `--folder <name|id>`, `--favorite`, `--from-json`
 
-`--username`, any `--password-*`, and `--uri` require `--type login`; a note cannot hold
-them and passing them to one is now an error rather than a silent drop.
+`--username`, any `--password-*` or `--totp-*`, and `--uri` require `--type login`; a note
+cannot hold them and passing them to one is now an error rather than a silent drop.
 
 Field syntax: `k=v` (text), `!k=v` (hidden), `bool:k=v` (boolean). The same key syntax works for `--field-file` and `--field-env`, where the value is a path or environment variable name. Stdin is read as `--notes` when piped; prefer `--password-stdin` for login passwords.
 
@@ -114,7 +141,24 @@ bwx edit "API Key" --add-field region=us-east-1
 printf '%s' "$TOKEN" | bwx edit "GitHub" --password-stdin --uri https://github.com
 bwx edit "Note" --rm-field old-key
 ```
-Flags: `--name`, `--notes`, `--notes-file`, `--username`, `--password`, `--password-stdin`, `--password-file`, `--password-env`, `--password-generate`, `--generate-length <n>`, `--uri` (replaces all), `--add-field k=v`, `--add-field-file k=path`, `--add-field-env k=ENV`, `--rm-field name`, `--folder <name|id>` (`none` unfiles), `--favorite/--no-favorite`, `--from-json`
+Flags: `--name`, `--notes`, `--notes-file`, `--username`, `--password`, `--password-stdin`, `--password-file`, `--password-env`, `--password-generate`, `--generate-length <n>`, `--totp`, `--totp-stdin`, `--totp-file`, `--totp-env`, `--rm-totp`, `--uri` (replaces all), `--add-field k=v`, `--add-field-file k=path`, `--add-field-env k=ENV`, `--rm-field name`, `--folder <name|id>` (`none` unfiles), `--favorite/--no-favorite`, `--from-json`
+
+### Storing a TOTP secret
+
+```bash
+BWX_SEED="JBSWY3DPEHPK3PXP" bwx create --type login --name "AWS" --username me --totp-env BWX_SEED
+bwx edit "AWS" --totp "otpauth://totp/AWS:me?secret=JBSWY3DPEHPK3PXP&issuer=AWS"
+bwx edit "AWS" --rm-totp
+```
+
+Takes a bare base32 secret (spaces, hyphens, and `=` padding are stripped; case is
+normalized) or a full `otpauth://` URI, which is stored verbatim so its `period`/`digits`/
+`algorithm` survive. Malformed secrets are rejected **before** the write — a bad seed
+otherwise sits in the vault until it fails the login it was meant to unlock, which is the
+one moment it cannot be fixed.
+
+Prefer `--totp-env` or `--totp-stdin` over `--totp`: a seed on the command line lands in
+shell history and `ps` output.
 
 ### `bwx delete <item>`
 
@@ -186,7 +230,9 @@ even under `--json`; `-q` silences them.
 - Prefer `--password-generate` over generating a secret yourself and passing it in.
 - Request the narrowest field, resolving an exact item ID first.
 - Use `-q` for command substitution so unlock logs cannot contaminate merged output.
-- On writes, prefer `--password-stdin`, `--password-env`, `--field-file`, `--field-env`.
+- On writes, prefer `--password-stdin`, `--password-env`, `--totp-stdin`, `--totp-env`, `--field-file`, `--field-env`.
+- Check `secondsRemaining` on a TOTP, or pass `--fresh`, before handing the code anywhere.
+- Use `hasTotp` on a listing to find 2FA items; never `--full-items` for that.
 - Never echo, log, checksum, or commit retrieved values; `unset` temporary variables.
 
 ## Auth

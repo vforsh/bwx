@@ -70,6 +70,7 @@ unlock. `valid` means reads work now, `stale` means the cached session was rejec
 | Command | Description |
 |---------|-------------|
 | `bwx get <field> <item>` | Get field (`password`, `username`, `totp`, `notes`, `uri`, `item`) |
+| `bwx get totp <item>` | TOTP code (`--fresh [n]`, `--seed`) |
 | `bwx field <name> <item>` | Get custom field by name (same argument order as `get`) |
 | `bwx search <query>` | Search items (`--type`, `--folder`, `--limit`, `--full-items`) |
 | `bwx list [type]` | List items (`--type`, `--folder`, `--limit`, `--full-items`) |
@@ -79,10 +80,17 @@ unlock. `valid` means reads work now, `stale` means the cached session was rejec
 | `bwx attach list <item>` | List attachments for an item |
 | `bwx attach get <item> <attachment>` | Download attachment by ID or filename |
 
-`search` and `list` print the same reduced projection — id, type, name, username — in
-human, `--plain`, and `--json` form, so asking for machine-readable output never widens
-what is exposed. `--full-items` is the explicit opt-in to complete item objects, which
-carry passwords, notes, and custom fields.
+`search` and `list` print the same reduced projection — id, type, name, username,
+hasTotp — in human, `--plain`, and `--json` form, so asking for machine-readable output
+never widens what is exposed. `--full-items` is the explicit opt-in to complete item
+objects, which carry passwords, notes, and custom fields.
+
+`hasTotp` reports that an item has a TOTP secret without carrying it, so finding your 2FA
+items does not mean dumping the vault:
+
+```bash
+bwx list --json --limit 0 | jq -r '.data[] | select(.hasTotp) | .name'
+```
 
 A lookup that finds nothing suggests what you probably meant, and one that matches
 several items lists them, so neither ends in a guessing round:
@@ -94,6 +102,42 @@ error: No item matching "GitHub PAT vforsh old". Did you mean:
   934c1f57-…  note  GitHub PAT (vforsh)
   3683fb9a-…  note  GitHub PAT (yaforsh) [codex-monitor-pr]
 ```
+
+### TOTP
+
+Codes are computed locally from the stored secret. A TOTP therefore costs no extra `bw`
+spawn and batches with the other fields of the same item, and bwx can report how long the
+code has left.
+
+```bash
+bwx get totp "AWS"              # code on stdout, "Valid for 17s" on stderr
+bwx get totp "AWS" --json       # { "data": "123456", "meta": { "secondsRemaining": 17, "period": 30 } }
+bwx get totp "AWS" --fresh      # wait for the next window if under 5s remain
+bwx get totp "AWS" --fresh 15   # ...or under 15s
+bwx get totp "AWS" --seed       # the stored secret, for moving it to another authenticator
+```
+
+The remainder matters more than it looks: a vault read plus the time to actually use the
+code often leaves single-digit seconds, and a code that expires in transit fails the login
+without saying why. `--fresh` sleeps at most one period and hands back a full window.
+
+Bare base32 and `otpauth://` URIs are both understood, including non-default `period`,
+`digits`, and `algorithm` (SHA1/SHA256/SHA512). Secrets bwx will not compute exactly —
+`steam://`, unknown algorithms, anything that fails to decode — fall back to `bw get totp`
+rather than being guessed at, since a wrong code is indistinguishable from a right one
+until the login fails.
+
+Storing a secret:
+
+```bash
+BWX_SEED="JBSWY3DPEHPK3PXP" bwx create --type login --name "AWS" --username me --totp-env BWX_SEED
+bwx edit "AWS" --totp "otpauth://totp/AWS:me?secret=JBSWY3DPEHPK3PXP&issuer=AWS"
+bwx edit "AWS" --rm-totp
+```
+
+Spaces, hyphens, and `=` padding are stripped and case is normalized; an `otpauth://` URI
+is stored verbatim so its parameters survive. Malformed secrets are rejected before the
+write, because a bad seed is otherwise discovered at the login it was supposed to unlock.
 
 ### Listings are capped
 
@@ -153,15 +197,15 @@ The check is cached in `~/.config/bwx/state.json`, so a fresh vault costs no ext
 
 | Command | Description |
 |---------|-------------|
-| `bwx create` | Create item (`--type`, `--name`, `--username`, `--password-stdin`, `--field-file k=path`) |
-| `bwx edit <item>` | Edit item (`--name`, `--password-env`, `--add-field-file k=path`, `--rm-field name`) |
+| `bwx create` | Create item (`--type`, `--name`, `--username`, `--password-stdin`, `--totp-env`, `--field-file k=path`) |
+| `bwx edit <item>` | Edit item (`--name`, `--password-env`, `--totp`, `--rm-totp`, `--add-field-file k=path`, `--rm-field name`) |
 | `bwx delete <item>` | Delete item (`--permanent`, `--force`) |
 | `bwx restore <item>` | Restore an item from the trash |
 | `bwx generate` | Generate a password or passphrase (local, no vault access) |
 
-Login-only flags (`--username`, any `--password-*`, `--uri`) require a login item. A
-secure note has nowhere to put them, so passing them to one is an error rather than an
-exit 0 over a credential that was silently dropped.
+Login-only flags (`--username`, any `--password-*` or `--totp-*`, `--uri`) require a login
+item. A secure note has nowhere to put them, so passing them to one is an error rather
+than an exit 0 over a credential that was silently dropped.
 
 `bwx delete` requires `--force` whenever it is not talking to a terminal. The confirmation
 prompt cannot render for a script or an agent, so without it `--force` would be decorative
@@ -217,6 +261,7 @@ bwx create --name "Acme" --field-file '!API Key=./token.txt' --field-env account
 Supported source flags:
 
 - Passwords: `--password-stdin`, `--password-file <path>`, `--password-env <name>`
+- TOTP secrets: `--totp-stdin`, `--totp-file <path>`, `--totp-env <name>`
 - Notes: `--notes-file <path>`
 - Create fields: `--field-file k=path`, `--field-env k=ENV`
 - Edit fields: `--add-field-file k=path`, `--add-field-env k=ENV`
