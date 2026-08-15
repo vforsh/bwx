@@ -7,6 +7,7 @@ import {
 	loadConfig,
 	saveConfig,
 } from "../../config/store.ts";
+import { readLine } from "../input.ts";
 
 export function registerConfig(program: Command): void {
 	const configCmd = program
@@ -160,14 +161,4 @@ function redactSensitive(value: unknown): unknown {
 
 function isSensitiveKey(key: string): boolean {
 	return SENSITIVE_KEY_RE.some((pattern) => pattern.test(key));
-}
-
-async function readLine(): Promise<string> {
-	const chunks: Uint8Array[] = [];
-	for await (const chunk of Bun.stdin.stream()) {
-		chunks.push(chunk);
-		const text = Buffer.concat(chunks).toString();
-		if (text.includes("\n")) return text.split("\n")[0]!.trim();
-	}
-	return Buffer.concat(chunks).toString().trim();
 }

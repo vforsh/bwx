@@ -128,7 +128,11 @@ describe("resolveItemTextInputs", () => {
 			new StdinReader(),
 		);
 
-		expect(result).toEqual({ notes: "hello", password: "from-env" });
+		expect(result).toEqual({
+			notes: "hello",
+			password: "from-env",
+			passwordGenerated: false,
+		});
 	});
 
 	test("rejects conflicting stdin sources", async () => {

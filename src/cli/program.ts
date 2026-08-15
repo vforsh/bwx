@@ -17,6 +17,9 @@ import { registerDoctor } from "./commands/doctor.ts";
 import { registerList } from "./commands/list.ts";
 import { registerAttach } from "./commands/attach.ts";
 import { registerRun } from "./commands/run.ts";
+import { registerGenerate } from "./commands/generate.ts";
+import { registerFolders } from "./commands/folders.ts";
+import { registerTrash } from "./commands/trash.ts";
 
 export function buildProgram(): Command {
 	const program = new Command();
@@ -59,8 +62,11 @@ export function buildProgram(): Command {
 	registerCreate(program);
 	registerEdit(program);
 	registerDelete(program);
+	registerTrash(program);
 	registerAttach(program);
 	registerList(program);
+	registerFolders(program);
+	registerGenerate(program);
 	registerConfig(program);
 	registerDoctor(program);
 

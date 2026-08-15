@@ -2,9 +2,19 @@ import pc from "picocolors";
 import { CliError, ExitCode } from "./errors.ts";
 import type { GlobalOptions } from "./types.ts";
 
-export function emitData(value: unknown, opts: GlobalOptions): void {
+/**
+ * `meta` rides along in the JSON envelope for facts about the response itself
+ * (truncation, counts) that a machine caller cannot recover from `data` alone.
+ * It is omitted entirely when absent, so `{ data }` stays the stable shape.
+ */
+export function emitData(
+	value: unknown,
+	opts: GlobalOptions,
+	meta?: Record<string, unknown>,
+): void {
 	if (opts.json) {
-		process.stdout.write(JSON.stringify({ data: value }, null, 2) + "\n");
+		const payload = meta ? { data: value, meta } : { data: value };
+		process.stdout.write(JSON.stringify(payload, null, 2) + "\n");
 	} else if (opts.plain) {
 		if (typeof value === "string") {
 			process.stdout.write(value + "\n");

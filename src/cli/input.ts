@@ -6,6 +6,17 @@ export function collect(val: string, prev: string[]): string[] {
 	return prev;
 }
 
+/** Reads a single line from stdin, for the few interactive prompts bwx has. */
+export async function readLine(): Promise<string> {
+	const chunks: Uint8Array[] = [];
+	for await (const chunk of Bun.stdin.stream()) {
+		chunks.push(chunk);
+		const text = Buffer.concat(chunks).toString();
+		if (text.includes("\n")) return text.split("\n")[0]!.trim();
+	}
+	return Buffer.concat(chunks).toString().trim();
+}
+
 /**
  * Lazily reads stdin once. Commands validate that only one explicit stdin source
  * is selected, but caching also keeps implicit legacy stdin reads predictable.
@@ -25,6 +36,8 @@ export interface TextSource {
 	stdin?: boolean;
 	file?: string;
 	env?: string;
+	/** Produces the value instead of reading it — see `--password-generate`. */
+	generate?: () => Promise<string>;
 	flagNames: string[];
 	allowEmpty?: boolean;
 }
@@ -45,11 +58,14 @@ export interface ItemTextInputs {
 	passwordStdin?: boolean;
 	passwordFile?: string;
 	passwordEnv?: string;
+	passwordGenerate?: boolean;
 }
 
 export interface ResolvedItemTextInputs {
 	notes?: string;
 	password?: string;
+	/** True when the password was generated, so callers can keep it unprinted. */
+	passwordGenerated?: boolean;
 }
 
 export interface ExplicitStdinInputs extends ItemTextInputs {
@@ -63,11 +79,13 @@ const PASSWORD_SOURCE_FLAGS = [
 	"--password-stdin",
 	"--password-file",
 	"--password-env",
+	"--password-generate",
 ];
 
 export async function resolveItemTextInputs(
 	inputs: ItemTextInputs,
 	stdin: StdinReader,
+	generatePassword?: () => Promise<string>,
 ): Promise<ResolvedItemTextInputs> {
 	assertSingleStdinSource(listExplicitStdinInputs(inputs));
 
@@ -89,13 +107,21 @@ export async function resolveItemTextInputs(
 				stdin: inputs.passwordStdin,
 				file: inputs.passwordFile,
 				env: inputs.passwordEnv,
+				generate:
+					inputs.passwordGenerate && generatePassword
+						? generatePassword
+						: undefined,
 				flagNames: PASSWORD_SOURCE_FLAGS,
 			},
 			stdin,
 		),
 	]);
 
-	return { notes, password };
+	return {
+		notes,
+		password,
+		passwordGenerated: inputs.passwordGenerate ?? false,
+	};
 }
 
 export function listExplicitStdinInputs(inputs: ExplicitStdinInputs): string[] {
@@ -118,6 +144,7 @@ export async function resolveOptionalTextSource(
 		source.stdin ? "stdin" : null,
 		source.file !== undefined ? "file" : null,
 		source.env !== undefined ? "env" : null,
+		source.generate !== undefined ? "generate" : null,
 	].filter((value): value is string => value !== null);
 
 	if (selected.length > 1) {
@@ -136,6 +163,8 @@ export async function resolveOptionalTextSource(
 		value = await stdin.read();
 	} else if (source.file !== undefined) {
 		value = await readFileOrStdin(source.file, stdin, source.label);
+	} else if (source.generate !== undefined) {
+		value = await source.generate();
 	} else {
 		value = readEnvValue(source.env!, source.label);
 	}
