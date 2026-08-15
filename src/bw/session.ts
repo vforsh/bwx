@@ -60,21 +60,47 @@ async function getMasterPassword(): Promise<string> {
 	return pw;
 }
 
+/**
+ * Whether reads will work right now without an unlock. `bw status` answers for
+ * the vault, not for us: it reports "locked" whenever the vault has no session
+ * of its own, even when bwx holds a cached one that works perfectly. Reporting
+ * that raw answer sends callers off to unlock a vault they can already read.
+ */
+export type SessionState =
+	/** Cached session works — reads succeed with no unlock. */
+	| "valid"
+	/** A session was cached but the vault no longer accepts it. */
+	| "stale"
+	/** Nothing cached; the next read unlocks. */
+	| "none";
+
+/** Confirms a token by asking the vault, which is the only authority on it. */
+async function sessionWorks(token: string): Promise<boolean> {
+	const check = await runBw(["status"], { session: token });
+	if (check.exitCode !== 0) return false;
+	try {
+		return (
+			BwStatusSchema.parse(JSON.parse(check.stdout)).status === "unlocked"
+		);
+	} catch {
+		return false;
+	}
+}
+
+export async function probeSessionState(
+	opts: GlobalOptions,
+): Promise<SessionState> {
+	const cached = getSession() || loadCachedSession(opts);
+	if (!cached) return "none";
+	return (await sessionWorks(cached)) ? "valid" : "stale";
+}
+
 export async function ensureUnlocked(opts: GlobalOptions): Promise<void> {
 	// Try cached session first
 	const cached = getSession() || loadCachedSession(opts);
 	if (cached) {
 		setSession(cached);
-		// Quick check — try a lightweight command
-		const check = await runBw(["status"]);
-		if (check.exitCode === 0) {
-			try {
-				const status = BwStatusSchema.parse(JSON.parse(check.stdout));
-				if (status.status === "unlocked") return;
-			} catch {
-				// Fall through
-			}
-		}
+		if (await sessionWorks(cached)) return;
 	}
 
 	const status = await getStatus();
