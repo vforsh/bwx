@@ -1,6 +1,6 @@
 import type { Command } from "commander";
 import { constants } from "node:os";
-import { readItemField } from "../../bw/fields.ts";
+import { readFields } from "../../bw/fields.ts";
 import { CliError, ExitCode } from "../errors.ts";
 import { collect } from "../input.ts";
 import { emitLog } from "../io.ts";
@@ -95,18 +95,23 @@ export function parseEnvSpec(raw: string): EnvSpec {
 	return { name, field: ref.slice(0, colon), item: ref.slice(colon + 1) };
 }
 
-/** Resolves secrets one at a time: each read spawns `bw`, and unlocks must not race. */
+/**
+ * Resolves every secret, paying one `bw` spawn per distinct *item* rather than
+ * per variable — pulling a username and password from the same item is a single
+ * vault read.
+ */
 async function resolveSecrets(
 	specs: EnvSpec[],
 	opts: GlobalOptions,
 ): Promise<Record<string, string>> {
-	const secrets: Record<string, string> = {};
+	const values = await readFields(
+		specs.map((spec) => ({ field: spec.field, item: spec.item })),
+		opts,
+	);
 
-	for (const spec of specs) {
-		secrets[spec.name] = await readItemField(spec.field, spec.item, opts);
-	}
-
-	return secrets;
+	return Object.fromEntries(
+		specs.map((spec, index) => [spec.name, values[index]!]),
+	);
 }
 
 /**
