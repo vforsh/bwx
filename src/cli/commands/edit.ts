@@ -5,6 +5,9 @@ import { CliError, ExitCode } from "../errors.ts";
 import { runBwOrThrow } from "../../bw/runner.ts";
 import { withSession } from "../../bw/session.ts";
 import { patchItem, bwEncode } from "../../bw/encoding.ts";
+import { generateSecret } from "../../bw/generate.ts";
+import { resolveFolderRef } from "../../bw/folders.ts";
+import { BwItemType } from "../../bw/types.ts";
 import {
 	assertSingleStdinSource,
 	collect,
@@ -14,6 +17,7 @@ import {
 	StdinReader,
 	type ItemTextInputs,
 } from "../input.ts";
+import { redactGeneratedPassword } from "./generate.ts";
 
 interface EditOptions extends ItemTextInputs {
 	name?: string;
@@ -26,7 +30,17 @@ interface EditOptions extends ItemTextInputs {
 	folder?: string;
 	favorite?: boolean;
 	fromJson?: boolean;
+	generateLength?: number;
 }
+
+const LOGIN_ONLY_FLAGS: Array<[keyof EditOptions, string]> = [
+	["username", "--username"],
+	["password", "--password"],
+	["passwordStdin", "--password-stdin"],
+	["passwordFile", "--password-file"],
+	["passwordEnv", "--password-env"],
+	["passwordGenerate", "--password-generate"],
+];
 
 export function registerEdit(program: Command): void {
 	program
@@ -41,12 +55,14 @@ export function registerEdit(program: Command): void {
 		.option("--password-stdin", "Read password from stdin")
 		.option("--password-file <path>", "Read password from file (use - for stdin)")
 		.option("--password-env <name>", "Read password from environment variable")
+		.option("--password-generate", "Generate the password; it is never printed")
+		.option("--generate-length <n>", "Length for --password-generate", parseInt)
 		.option("--uri <url>", "Set URIs (repeatable, replaces all)", collect, [])
 		.option("--add-field <kv>", "Add/update field k=v", collect, [])
 		.option("--add-field-file <kv>", "Add/update field value from file k=path", collect, [])
 		.option("--add-field-env <kv>", "Add/update field value from env var k=ENV", collect, [])
 		.option("--rm-field <name>", "Remove field by name", collect, [])
-		.option("--folder <id>", "Move to folder")
+		.option("--folder <name|id>", "Move to folder ('none' to unfile)")
 		.option("--favorite", "Set favorite")
 		.option("--no-favorite", "Unset favorite")
 		.option("--from-json", "Read full item JSON from stdin (replaces item)")
@@ -57,6 +73,7 @@ export function registerEdit(program: Command): void {
 		) {
 			const opts = getGlobalOpts(this);
 			const stdin = new StdinReader();
+			let generated = false;
 
 			const result = await withSession(opts, async () => {
 				// Fetch current item
@@ -73,6 +90,8 @@ export function registerEdit(program: Command): void {
 					}
 					encoded = bwEncode(stdinText);
 				} else {
+					assertLoginFlags(localOpts, current);
+
 					assertSingleStdinSource(
 						listExplicitStdinInputs({
 							...localOpts,
@@ -81,7 +100,10 @@ export function registerEdit(program: Command): void {
 						}),
 					);
 
-					const textInputs = await resolveItemTextInputs(localOpts, stdin);
+					const textInputs = await resolveItemTextInputs(localOpts, stdin, () =>
+						generateSecret({ length: localOpts.generateLength }),
+					);
+					generated = textInputs.passwordGenerated ?? false;
 
 					const addFields = await resolveFieldSources({
 						inline: localOpts.addField,
@@ -100,7 +122,9 @@ export function registerEdit(program: Command): void {
 						uris: localOpts.uri.length > 0 ? localOpts.uri : undefined,
 						addFields,
 						rmFields: localOpts.rmField,
-						folderId: localOpts.folder,
+						folderId: localOpts.folder
+							? await resolveFolderRef(localOpts.folder, opts)
+							: undefined,
 						favorite: localOpts.favorite,
 					});
 					encoded = bwEncode(JSON.stringify(patched));
@@ -111,11 +135,35 @@ export function registerEdit(program: Command): void {
 
 			const updated = JSON.parse(result);
 			if (opts.json) {
-				emitData(updated, opts);
+				emitData(redactGeneratedPassword(updated, generated), opts);
 			} else if (opts.plain) {
 				emitData(updated.id, opts);
 			} else {
-				emitSuccess(`Updated "${updated.name}" (${updated.id})`, opts);
+				const note = generated ? " — password generated (not printed)" : "";
+				emitSuccess(`Updated "${updated.name}" (${updated.id})${note}`, opts);
 			}
 		});
+}
+
+/**
+ * Same trap as `create`: only a login item has somewhere to put a password, so
+ * setting one on a note would be accepted and then quietly lost.
+ */
+function assertLoginFlags(
+	localOpts: EditOptions,
+	current: Record<string, unknown>,
+): void {
+	if (current.type === BwItemType.Login) return;
+
+	const used = LOGIN_ONLY_FLAGS.filter(([key]) => Boolean(localOpts[key])).map(
+		([, flag]) => flag,
+	);
+	if (localOpts.uri.length > 0) used.push("--uri");
+
+	if (used.length === 0) return;
+
+	throw new CliError(
+		`${used.join(", ")} ${used.length > 1 ? "need" : "needs"} a login item, but "${String(current.name)}" is not one.`,
+		ExitCode.BadArgs,
+	);
 }

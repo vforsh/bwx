@@ -5,6 +5,8 @@ import { CliError, ExitCode } from "../errors.ts";
 import { runBwOrThrow } from "../../bw/runner.ts";
 import { withSession } from "../../bw/session.ts";
 import { buildNewItem, bwEncode } from "../../bw/encoding.ts";
+import { generateSecret } from "../../bw/generate.ts";
+import { resolveFolderRef } from "../../bw/folders.ts";
 import {
 	assertSingleStdinSource,
 	collect,
@@ -15,6 +17,7 @@ import {
 	StdinReader,
 	type ItemTextInputs,
 } from "../input.ts";
+import { redactGeneratedPassword } from "./generate.ts";
 
 interface CreateOptions extends ItemTextInputs {
 	type: string;
@@ -27,7 +30,18 @@ interface CreateOptions extends ItemTextInputs {
 	folder?: string;
 	favorite?: boolean;
 	fromJson?: boolean;
+	generateLength?: number;
 }
+
+/** Flags a secure note has nowhere to store — see {@link assertLoginFlags}. */
+const LOGIN_ONLY_FLAGS: Array<[keyof CreateOptions, string]> = [
+	["username", "--username"],
+	["password", "--password"],
+	["passwordStdin", "--password-stdin"],
+	["passwordFile", "--password-file"],
+	["passwordEnv", "--password-env"],
+	["passwordGenerate", "--password-generate"],
+];
 
 export function registerCreate(program: Command): void {
 	program
@@ -42,11 +56,13 @@ export function registerCreate(program: Command): void {
 		.option("--password-stdin", "Read password from stdin")
 		.option("--password-file <path>", "Read password from file (use - for stdin)")
 		.option("--password-env <name>", "Read password from environment variable")
+		.option("--password-generate", "Generate the password; it is never printed")
+		.option("--generate-length <n>", "Length for --password-generate", parseInt)
 		.option("--uri <url>", "URI (repeatable)", collect, [])
 		.option("--field <kv>", "Custom field k=v (repeatable)", collect, [])
 		.option("--field-file <kv>", "Custom field value from file k=path (repeatable)", collect, [])
 		.option("--field-env <kv>", "Custom field value from env var k=ENV (repeatable)", collect, [])
-		.option("--folder <id>", "Folder ID")
+		.option("--folder <name|id>", "Folder name or ID")
 		.option("--favorite", "Mark as favorite")
 		.option("--from-json", "Read full item JSON from stdin")
 		.action(async function (
@@ -57,6 +73,7 @@ export function registerCreate(program: Command): void {
 			const stdin = new StdinReader();
 
 			let encoded: string;
+			let generated = false;
 
 			if (localOpts.fromJson) {
 				const stdinText = await stdin.read();
@@ -82,6 +99,8 @@ export function registerCreate(program: Command): void {
 					);
 				}
 
+				assertLoginFlags(localOpts);
+
 				const explicitStdinSources = listExplicitStdinInputs({
 					...localOpts,
 					fieldFileFlag: "--field-file",
@@ -89,7 +108,10 @@ export function registerCreate(program: Command): void {
 				});
 				assertSingleStdinSource(explicitStdinSources);
 
-				const textInputs = await resolveItemTextInputs(localOpts, stdin);
+				const textInputs = await resolveItemTextInputs(localOpts, stdin, () =>
+					generateSecret({ length: localOpts.generateLength }),
+				);
+				generated = textInputs.passwordGenerated ?? false;
 				let notes = textInputs.notes;
 
 				// Backward compatibility: piped create input becomes note content.
@@ -119,7 +141,9 @@ export function registerCreate(program: Command): void {
 					password: textInputs.password ?? null,
 					uris: localOpts.uri,
 					fields,
-					folderId: localOpts.folder ?? null,
+					folderId: localOpts.folder
+						? await resolveFolderRef(localOpts.folder, opts)
+						: null,
 					favorite: localOpts.favorite ?? false,
 				});
 
@@ -132,11 +156,33 @@ export function registerCreate(program: Command): void {
 
 			const created = JSON.parse(result);
 			if (opts.json) {
-				emitData(created, opts);
+				emitData(redactGeneratedPassword(created, generated), opts);
 			} else if (opts.plain) {
 				emitData(created.id, opts);
 			} else {
-				emitSuccess(`Created "${created.name}" (${created.id})`, opts);
+				const note = generated ? " — password generated (not printed)" : "";
+				emitSuccess(`Created "${created.name}" (${created.id})${note}`, opts);
 			}
 		});
+}
+
+/**
+ * A secure note has no login object, so `buildNewItem` drops usernames,
+ * passwords, and URIs on the floor. Accepting them silently means a caller can
+ * "store" a credential, get exit 0, and end up with an item that never held it.
+ */
+function assertLoginFlags(localOpts: CreateOptions): void {
+	if (localOpts.type === "login") return;
+
+	const used = LOGIN_ONLY_FLAGS.filter(([key]) => Boolean(localOpts[key])).map(
+		([, flag]) => flag,
+	);
+	if (localOpts.uri.length > 0) used.push("--uri");
+
+	if (used.length > 0) {
+		throw new CliError(
+			`${used.join(", ")} ${used.length > 1 ? "need" : "needs"} --type login (a note cannot store them).`,
+			ExitCode.BadArgs,
+		);
+	}
 }

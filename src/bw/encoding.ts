@@ -98,7 +98,8 @@ export interface PatchOptions {
 	uris?: string[];
 	addFields?: ParsedField[];
 	rmFields?: string[];
-	folderId?: string;
+	/** `null` unfiles the item; `undefined` leaves its folder alone. */
+	folderId?: string | null;
 	favorite?: boolean;
 }
 
