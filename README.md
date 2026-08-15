@@ -54,20 +54,27 @@ bwx doctor
 
 | Command | Description |
 |---------|-------------|
-| `bwx status` | Show vault state |
+| `bwx status` | Show vault state and whether reads work right now |
 | `bwx unlock` | Unlock vault & cache session |
 | `bwx lock` | Lock vault & clear session |
 | `bwx sync` | Sync vault from server |
 | `bwx doctor` | Check setup (bw CLI, email, password, config) |
+
+`status` reports a `session` alongside the vault state, because `bw` answers for the
+vault and not for bwx: a `locked` vault with a `valid` session reads fine and needs no
+unlock. `valid` means reads work now, `stale` means the cached session was rejected, and
+`none` means the next read unlocks.
 
 ### Read
 
 | Command | Description |
 |---------|-------------|
 | `bwx get <field> <item>` | Get field (`password`, `username`, `totp`, `notes`, `uri`, `item`) |
-| `bwx field <item> <name>` | Get custom field by name |
+| `bwx field <name> <item>` | Get custom field by name (same argument order as `get`) |
 | `bwx search <query>` | Search items (`--type`, `--folder`, `--limit`, `--full-items`) |
-| `bwx list [type]` | List items (`--folder`, `--limit`, `--full-items`) |
+| `bwx list [type]` | List items (`--type`, `--folder`, `--limit`, `--full-items`) |
+| `bwx folders` | List folder names and IDs |
+| `bwx trash` | List items in the trash |
 | `bwx run --env NAME=<field>:<item> -- <cmd>` | Run a command with secrets in its environment |
 | `bwx attach list <item>` | List attachments for an item |
 | `bwx attach get <item> <attachment>` | Download attachment by ID or filename |
@@ -76,6 +83,41 @@ bwx doctor
 human, `--plain`, and `--json` form, so asking for machine-readable output never widens
 what is exposed. `--full-items` is the explicit opt-in to complete item objects, which
 carry passwords, notes, and custom fields.
+
+A lookup that finds nothing suggests what you probably meant, and one that matches
+several items lists them, so neither ends in a guessing round:
+
+```
+$ bwx get password "GitHub PAT vforsh old"
+error: No item matching "GitHub PAT vforsh old". Did you mean:
+
+  934c1f57-…  note  GitHub PAT (vforsh)
+  3683fb9a-…  note  GitHub PAT (yaforsh) [codex-monitor-pr]
+```
+
+### Listings are capped
+
+Listings stop at 50 items by default — an uncapped `bwx list` returns the whole vault,
+and with `--full-items` that is every secret in one call. `--limit 0` opts out. Truncation
+is never silent: it warns on stderr (surviving `--json`) and adds `meta` to the JSON
+envelope.
+
+```bash
+bwx list --limit 0            # everything
+bwx list --json               # { "data": [...], "meta": { "total": 491, "shown": 50, "truncated": true } }
+```
+
+### Folders
+
+`--folder` takes a name or an ID on `list`, `search`, `create`, and `edit`; `none` means
+the unfiled bucket. Names are resolved against the vault, so `bwx folders` is only needed
+to see what exists.
+
+```bash
+bwx folders
+bwx list --folder "API Keys"
+bwx edit "Acme" --folder none     # unfile
+```
 
 ### Secrets into a child process
 
@@ -114,6 +156,34 @@ The check is cached in `~/.config/bwx/state.json`, so a fresh vault costs no ext
 | `bwx create` | Create item (`--type`, `--name`, `--username`, `--password-stdin`, `--field-file k=path`) |
 | `bwx edit <item>` | Edit item (`--name`, `--password-env`, `--add-field-file k=path`, `--rm-field name`) |
 | `bwx delete <item>` | Delete item (`--permanent`, `--force`) |
+| `bwx restore <item>` | Restore an item from the trash |
+| `bwx generate` | Generate a password or passphrase (local, no vault access) |
+
+Login-only flags (`--username`, any `--password-*`, `--uri`) require a login item. A
+secure note has nowhere to put them, so passing them to one is an error rather than an
+exit 0 over a credential that was silently dropped.
+
+`bwx delete` requires `--force` whenever it is not talking to a terminal. The confirmation
+prompt cannot render for a script or an agent, so without it `--force` would be decorative
+and every non-interactive delete unguarded. Deletes go to the trash unless `--permanent`,
+and `bwx trash` / `bwx restore` are the way back.
+
+### Generated passwords
+
+`--password-generate` on `create` and `edit` sends a new secret straight to the vault. It
+is never printed, never echoed back in `--json`, and never reaches a terminal, a
+transcript, or a log — which is what makes it safe to use from an agent.
+
+```bash
+bwx create --type login --name "Deploy" --username svc --password-generate
+bwx edit "Deploy" --password-generate --generate-length 32
+bwx generate --length 32                  # print one instead
+bwx generate --passphrase --words 5
+```
+
+`bwx generate` runs locally and needs no unlocked vault. Flags: `--length <n>`,
+`--no-uppercase`, `--no-lowercase`, `--no-numbers`, `-s/--special`, `--ambiguous`,
+`--passphrase`, `--words <n>`, `--separator <char>`, `--capitalize`, `--include-number`.
 
 ### Config
 
@@ -156,7 +226,7 @@ Supported source flags:
 
 | Flag | Effect |
 |------|--------|
-| `--json` | JSON output: `{ "data": ... }` / `{ "error": ... }` |
+| `--json` | JSON output: `{ "data": ... }` / `{ "error": ... }`, plus `meta` where a response describes itself |
 | `--plain` | Tab-separated, one item per line |
 | `-q, --quiet` | Suppress logs and warnings |
 | `-v, --verbose` | Include stack traces |
@@ -190,6 +260,17 @@ Field syntax for `--field`, `--field-file`, `--field-env`, and edit variants:
 | 7 | Config error |
 | 8 | Timeout |
 | 9 | User cancelled |
+
+## Upgrading to 0.5.0
+
+Breaking changes, all of them cases where the old behavior failed quietly:
+
+- `bwx field` takes `<name> <item>`, matching `bwx get`. It was `<item> <name>`.
+- `bwx delete` needs `--force` when not interactive; it used to delete unprompted.
+- `bwx list` and `bwx search` stop at 50 items unless given `--limit`. Pass `--limit 0`
+  for the old behavior.
+- `--limit` rejects non-numeric values instead of ignoring them (and returning everything).
+- Login-only flags on a secure note are an error instead of a silent drop.
 
 ## Stack
 

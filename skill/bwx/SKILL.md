@@ -17,7 +17,7 @@ bwx get notes "Deploy key"              # secure note content
 bwx get uri "GitHub"                    # first URI
 bwx get item "GitHub"                   # full item JSON
 bwx get "API Key" "Acme"                # custom field by name
-bwx field "Acme" "API Key"              # custom field alias
+bwx field "API Key" "Acme"              # custom-field-only lookup, same arg order
 
 bwx search github                       # fuzzy search, human table
 bwx search github --json                # id/type/name/username only — no secrets
@@ -25,6 +25,9 @@ bwx search github --type login --limit 5
 
 # hand a secret to a child process instead of printing it
 bwx run --env KEENETIC_PASS=password:'http://my.keenetic.net' -- expect ./recovery.exp
+
+# generate straight into the vault — the value never enters your context
+bwx create --type login --name "Deploy" --username svc --password-generate
 
 bwx attach list "Apple Developer"       # list item attachments
 bwx attach get "Apple Developer" AuthKey.p8
@@ -43,17 +46,30 @@ echo "secret" | bwx create --name "Piped Note"
 Built-in fields: `password | username | totp | notes | uri | item`.
 Anything else is looked up as a custom field. Lists available fields on miss.
 
-### `bwx field <item> <name>`
+A miss suggests near matches; an ambiguous name lists candidates with IDs. Read the
+suggestions instead of retrying variations — the answer is usually in them.
 
-Alias for retrieving custom fields with item-first argument order.
+### `bwx field <name> <item>`
+
+Custom fields only, so an item whose custom field is named `password` is still reachable.
+Takes its arguments in the same order as `get` (this changed in 0.5.0).
 
 ### `bwx search <query>` / `bwx list [type]`
 
-Flags: `--type login|note|card|identity` (`search`), `--folder <id>`, `--limit <n>`, `--full-items`
+Flags: `--type login|note|card|identity`, `--folder <name|id>`, `--limit <n>`, `--full-items`
 
 Human, `--plain`, and `--json` output all carry the same reduced projection — `id`, `type`,
 `name`, `username` — so listings never leak passwords, notes, or custom fields. `--full-items`
 opts into complete item objects and **does** include secrets; avoid it in logged sessions.
+
+**Listings stop at 50 items** unless you pass `--limit` (`--limit 0` for all). Truncation is
+reported on stderr and in `meta` on the JSON envelope — check it before concluding a listing
+was complete. `--limit` rejects non-numeric values rather than ignoring them.
+
+### `bwx folders`
+
+Lists folder names and IDs. `--folder` accepts either on `list`, `search`, `create`, and
+`edit`; `none` selects unfiled items.
 
 ### `bwx run --env NAME=<field>:<item> -- <command>`
 
@@ -70,6 +86,8 @@ bwx run --env TOKEN='API Key:Acme' --env USER=username:Acme -- ./deploy.sh
 - Put `--` before the command when it takes its own flags.
 - Child stdio is inherited; bwx exits with the child's status (`128 + signal` if killed).
 - `-v` logs injected variable names only, never values.
+- Several variables from one item cost a single vault read, so group them here rather
+  than issuing separate `bwx get` calls.
 
 ### `bwx attach list <item>`
 
@@ -81,7 +99,10 @@ Downloads an attachment by ID or filename. Defaults to saving as the attachment 
 
 ### `bwx create [options]`
 
-Flags: `--type login|note`, `--name`, `--notes`, `--notes-file`, `--username`, `--password`, `--password-stdin`, `--password-file`, `--password-env`, `--uri` (repeatable), `--field k=v` (repeatable), `--field-file k=path`, `--field-env k=ENV`, `--folder`, `--favorite`, `--from-json`
+Flags: `--type login|note`, `--name`, `--notes`, `--notes-file`, `--username`, `--password`, `--password-stdin`, `--password-file`, `--password-env`, `--password-generate`, `--generate-length <n>`, `--uri` (repeatable), `--field k=v` (repeatable), `--field-file k=path`, `--field-env k=ENV`, `--folder <name|id>`, `--favorite`, `--from-json`
+
+`--username`, any `--password-*`, and `--uri` require `--type login`; a note cannot hold
+them and passing them to one is now an error rather than a silent drop.
 
 Field syntax: `k=v` (text), `!k=v` (hidden), `bool:k=v` (boolean). The same key syntax works for `--field-file` and `--field-env`, where the value is a path or environment variable name. Stdin is read as `--notes` when piped; prefer `--password-stdin` for login passwords.
 
@@ -93,25 +114,50 @@ bwx edit "API Key" --add-field region=us-east-1
 printf '%s' "$TOKEN" | bwx edit "GitHub" --password-stdin --uri https://github.com
 bwx edit "Note" --rm-field old-key
 ```
-Flags: `--name`, `--notes`, `--notes-file`, `--username`, `--password`, `--password-stdin`, `--password-file`, `--password-env`, `--uri` (replaces all), `--add-field k=v`, `--add-field-file k=path`, `--add-field-env k=ENV`, `--rm-field name`, `--folder`, `--favorite/--no-favorite`, `--from-json`
+Flags: `--name`, `--notes`, `--notes-file`, `--username`, `--password`, `--password-stdin`, `--password-file`, `--password-env`, `--password-generate`, `--generate-length <n>`, `--uri` (replaces all), `--add-field k=v`, `--add-field-file k=path`, `--add-field-env k=ENV`, `--rm-field name`, `--folder <name|id>` (`none` unfiles), `--favorite/--no-favorite`, `--from-json`
 
 ### `bwx delete <item>`
 
 ```bash
-bwx delete "Test Note"              # prompts in TTY
-bwx delete "Test Note" --force      # skip prompt
-bwx delete "Test Note" --permanent  # no trash
+bwx delete "Test Note" --force      # --force is REQUIRED when not a TTY
+bwx delete "Test Note" --permanent --force  # skip the trash
+bwx trash                           # what is recoverable
+bwx restore "Test Note"             # undo a non-permanent delete
 ```
+
+The prompt only exists for a human at a terminal, so an agent must pass `--force`
+deliberately. Deletes are recoverable through `bwx restore` unless `--permanent`.
+
+### `bwx generate`
+
+```bash
+bwx generate --length 32
+bwx generate --passphrase --words 5 --separator -
+```
+
+Local, no vault access, no unlock. Flags: `--length <n>`, `--no-uppercase`,
+`--no-lowercase`, `--no-numbers`, `-s/--special`, `--ambiguous`, `--passphrase`,
+`--words <n>`, `--separator <char>`, `--capitalize`, `--include-number`.
+
+Prefer `--password-generate` on `create`/`edit` over generating and passing the value:
+it goes to the vault without ever entering your context, and `--json` returns
+`***GENERATED***` in place of the password.
 
 ### Other
 
 | Command | Description |
 |---------|-------------|
-| `bwx status` | Vault state (no auto-unlock) |
+| `bwx status` | Vault state + session usability (no auto-unlock) |
 | `bwx sync` | Force vault sync |
 | `bwx unlock` / `bwx lock` | Manual session control |
+| `bwx folders` | Folder names and IDs |
+| `bwx trash` / `bwx restore <item>` | Inspect and undo deletes |
 | `bwx config list` / `bwx cfg ls` | Show config path + redacted content |
 | `bwx config master-password` | Set/update master password in Keychain |
+
+`bwx status` reports `session: valid | stale | none` separately from the vault state.
+**A `locked` vault with a `valid` session reads fine — do not run `bwx unlock` on it.**
+Only `stale`/`none` mean the next read pays for an unlock.
 
 ## Global flags
 
@@ -137,6 +183,7 @@ even under `--json`; `-q` silences them.
 
 - Never use `--full-items` (or `get item` for discovery) in logged sessions.
 - Prefer `bwx run --env ...` over `export VAR="$(bwx get ...)"`; secrets never touch stdout or argv.
+- Prefer `--password-generate` over generating a secret yourself and passing it in.
 - Request the narrowest field, resolving an exact item ID first.
 - Use `-q` for command substitution so unlock logs cannot contaminate merged output.
 - On writes, prefer `--password-stdin`, `--password-env`, `--field-file`, `--field-env`.
