@@ -188,6 +188,18 @@ describe("patchItem", () => {
 		expect(base.name).toBe("Original");
 	});
 
+	test("does not mutate the original's nested login", () => {
+		// The spread in patchItem is shallow, so `login` has to be copied too —
+		// otherwise patching writes straight through into the caller's item.
+		patchItem(base, { username: "changed", password: "changed" });
+		expect(base.login).toEqual({
+			username: "user",
+			password: "pass",
+			totp: null,
+			uris: [{ match: null, uri: "https://old.com" }],
+		});
+	});
+
 	test("sets favorite", () => {
 		const patched = patchItem(base, { favorite: true });
 		expect(patched.favorite).toBe(true);

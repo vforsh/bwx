@@ -116,7 +116,9 @@ export function patchItem(
 
 	// Login fields
 	if (patch.username !== undefined || patch.password !== undefined || patch.uris !== undefined) {
-		const login = (result.login as Record<string, unknown>) ?? {};
+		// Copied, not aliased: `{ ...item }` above is shallow, so assigning into
+		// the original `login` would edit the caller's item as a side effect.
+		const login = { ...((result.login as Record<string, unknown>) ?? {}) };
 		if (patch.username !== undefined) login.username = patch.username;
 		if (patch.password !== undefined) login.password = patch.password;
 		if (patch.uris !== undefined) {
