@@ -3,10 +3,10 @@ import { rankSimilar } from "../src/bw/fields.ts";
 import type { ItemSummary } from "../src/bw/items.ts";
 
 const items: ItemSummary[] = [
-	{ id: "1", type: "note", name: "GitHub PAT", username: "vforsh" },
-	{ id: "2", type: "login", name: "GitLab token", username: null },
-	{ id: "3", type: "login", name: "Router admin", username: "admin" },
-	{ id: "4", type: "note", name: "npm publish token", username: null },
+	{ id: "1", type: "note", name: "GitHub PAT", username: "vforsh", hasTotp: false },
+	{ id: "2", type: "login", name: "GitLab token", username: null, hasTotp: false },
+	{ id: "3", type: "login", name: "Router admin", username: "admin", hasTotp: true },
+	{ id: "4", type: "note", name: "npm publish token", username: null, hasTotp: false },
 ];
 
 describe("rankSimilar", () => {

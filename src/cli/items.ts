@@ -107,12 +107,14 @@ export function writeItems(
 }
 
 function plainLine(summary: ItemSummary): string {
-	return `${summary.id}\t${summary.type}\t${summary.name}\t${summary.username ?? "-"}`;
+	const totp = summary.hasTotp ? "totp" : "-";
+	return `${summary.id}\t${summary.type}\t${summary.name}\t${summary.username ?? "-"}\t${totp}`;
 }
 
 function humanLine(summary: ItemSummary): string {
 	const userPart = summary.username ? pc.dim(` (${summary.username})`) : "";
-	return `${pc.dim(summary.id)}  ${pc.cyan(summary.type)}  ${summary.name}${userPart}`;
+	const totpPart = summary.hasTotp ? " " + pc.yellow("2fa") : "";
+	return `${pc.dim(summary.id)}  ${pc.cyan(summary.type)}  ${summary.name}${userPart}${totpPart}`;
 }
 
 function writeLines<T>(values: T[], format: (value: T) => string): void {

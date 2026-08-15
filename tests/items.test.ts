@@ -26,7 +26,16 @@ describe("summarizeItem", () => {
 			type: "login",
 			name: "Router",
 			username: "admin",
+			hasTotp: true,
 		});
+	});
+
+	test("reports that a TOTP exists without carrying the secret", () => {
+		expect(summarizeItem(NOTE).hasTotp).toBe(false);
+		expect(
+			summarizeItem({ ...LOGIN, login: { ...LOGIN.login, totp: "" } }).hasTotp,
+		).toBe(false);
+		expect(summarizeItem({ ...LOGIN, login: null }).hasTotp).toBe(false);
 	});
 
 	test("never carries secrets", () => {
