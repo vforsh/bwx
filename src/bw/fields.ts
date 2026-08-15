@@ -4,6 +4,14 @@ import type { GlobalOptions } from "../cli/types.ts";
 import { summarizeItem, type ItemSummary } from "./items.ts";
 import { runBwOrThrow } from "./runner.ts";
 import { withSession } from "./session.ts";
+import {
+	DEFAULT_PERIOD,
+	generateTotp,
+	parseTotpSecret,
+	secondsRemaining,
+	TotpUnsupportedError,
+	type TotpCode,
+} from "./totp.ts";
 import { BwItemSchema, type BwItem } from "./types.ts";
 
 /** Fields `bw get` resolves natively; anything else is a custom field name. */
@@ -16,14 +24,13 @@ const BUILTIN_FIELDS = [
 	"item",
 ] as const;
 
-/**
- * `totp` is a computed code, not stored data — only `bw get totp` can derive it,
- * so it is the one field that cannot be served from a fetched item.
- */
-const DERIVED_FIELDS = new Set(["totp"]);
-
 function isBuiltinField(field: string): boolean {
 	return (BUILTIN_FIELDS as readonly string[]).includes(field);
+}
+
+/** True when `field` should be read as the item's TOTP rather than a custom field. */
+function isTotpField(field: string, options?: ReadFieldOptions): boolean {
+	return field === "totp" && !options?.customOnly;
 }
 
 export interface ReadFieldOptions {
@@ -58,17 +65,85 @@ export async function readItemField(
 	opts: GlobalOptions,
 	options?: ReadFieldOptions,
 ): Promise<string> {
-	return withLookupHelp(item, opts, () =>
-		isBuiltinField(field) && !options?.customOnly
+	return withLookupHelp(item, opts, async () => {
+		if (isTotpField(field, options)) {
+			return (await resolveTotp(await fetchItem(item, opts), item, opts)).code;
+		}
+
+		return isBuiltinField(field) && !options?.customOnly
 			? readBuiltinField(field, item, opts)
-			: readCustomField(field, item, opts),
+			: readCustomField(field, item, opts);
+	});
+}
+
+/**
+ * Reads a TOTP with the time it has left. A code handed over with three seconds
+ * on it is usually dead before it is pasted, so callers need the remainder to
+ * decide whether to wait for the next window.
+ */
+export async function readTotp(
+	item: string,
+	opts: GlobalOptions,
+): Promise<TotpCode> {
+	return withLookupHelp(item, opts, async () =>
+		resolveTotp(await fetchItem(item, opts), item, opts),
 	);
+}
+
+/** The stored secret itself, for moving a seed back out to another authenticator. */
+export async function readTotpSecret(
+	item: string,
+	opts: GlobalOptions,
+): Promise<string> {
+	return withLookupHelp(item, opts, async () => {
+		const fetched = await fetchItem(item, opts);
+		return requireStoredTotp(fetched);
+	});
+}
+
+function requireStoredTotp(item: BwItem): string {
+	const stored = item.login?.totp;
+	if (!stored) {
+		throw new FieldMissingError(
+			`No totp found for item: ${item.name}`,
+			ExitCode.NotFound,
+		);
+	}
+	return stored;
+}
+
+/**
+ * Computes the code from the secret already in hand, falling back to `bw get
+ * totp` for the shapes this codebase will not compute itself (see `totp.ts`).
+ * The fallback costs a second spawn, which is the correct trade against
+ * emitting a confidently wrong six digits.
+ */
+async function resolveTotp(
+	fetched: BwItem,
+	item: string,
+	opts: GlobalOptions,
+): Promise<TotpCode> {
+	const stored = requireStoredTotp(fetched);
+
+	try {
+		return generateTotp(parseTotpSecret(stored));
+	} catch (err) {
+		if (!(err instanceof TotpUnsupportedError)) throw err;
+
+		return {
+			code: await readBuiltinField("totp", item, opts),
+			period: DEFAULT_PERIOD,
+			secondsRemaining: secondsRemaining(DEFAULT_PERIOD),
+		};
+	}
 }
 
 /**
  * Resolves many fields at once, paying a single `bw get item` per distinct item
  * rather than one `bw` spawn per field. Each spawn costs ~2.5s, so a caller
- * pulling a username and password from one item halves its own runtime.
+ * pulling a username and password from one item halves its own runtime. `totp`
+ * joins that batch too, since the code is computed from the secret the fetch
+ * already returned.
  *
  * Returns values positionally aligned with `requests`.
  */
@@ -88,32 +163,23 @@ export async function readFields(
 	for (const [item, indexes] of byItem) {
 		// A single `bw` process at a time: each read may trigger an unlock, and
 		// concurrent unlocks would race over the cached session.
-		const derived = indexes.filter((i) => isDerived(requests[i]!));
-		const stored = indexes.filter((i) => !isDerived(requests[i]!));
+		const fetched = await withLookupHelp(item, opts, () => fetchItem(item, opts));
 
-		if (stored.length > 0) {
-			const fetched = await withLookupHelp(item, opts, () =>
-				fetchItem(item, opts),
-			);
-			for (const index of stored) {
-				const request = requests[index]!;
+		for (const index of indexes) {
+			const request = requests[index]!;
+
+			if (isTotpField(request.field, request.options)) {
+				const totp = await withLookupHelp(item, opts, () =>
+					resolveTotp(fetched, item, opts),
+				);
+				values[index] = totp.code;
+			} else {
 				values[index] = extractField(fetched, request.field, request.options);
 			}
-		}
-
-		for (const index of derived) {
-			const request = requests[index]!;
-			values[index] = await withLookupHelp(item, opts, () =>
-				readBuiltinField(request.field, item, opts),
-			);
 		}
 	}
 
 	return values;
-}
-
-function isDerived(request: FieldRequest): boolean {
-	return !request.options?.customOnly && DERIVED_FIELDS.has(request.field);
 }
 
 /**
@@ -165,14 +231,28 @@ function extractField(
 
 	if (field === "item") return JSON.stringify(item);
 
-	const value =
-		field === "notes"
-			? item.notes
-			: field === "uri"
-				? (item.login?.uris?.[0]?.uri ?? null)
-				: field === "username"
-					? (item.login?.username ?? null)
-					: (item.login?.password ?? null);
+	// Named exhaustively rather than defaulted: a chain ending in `password`
+	// would hand back the password for any field it failed to recognize.
+	let value: string | null;
+	switch (field) {
+		case "notes":
+			value = item.notes;
+			break;
+		case "uri":
+			value = item.login?.uris?.[0]?.uri ?? null;
+			break;
+		case "username":
+			value = item.login?.username ?? null;
+			break;
+		case "password":
+			value = item.login?.password ?? null;
+			break;
+		default:
+			throw new FieldMissingError(
+				`Field "${field}" cannot be read from a fetched item`,
+				ExitCode.NotFound,
+			);
+	}
 
 	if (!value) {
 		throw new FieldMissingError(

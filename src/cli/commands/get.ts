@@ -1,8 +1,12 @@
 import type { Command } from "commander";
 import { getGlobalOpts } from "../program.ts";
-import { emitData } from "../io.ts";
-import { readItemField } from "../../bw/fields.ts";
-import { CliError } from "../errors.ts";
+import { emitData, emitLog } from "../io.ts";
+import { readItemField, readTotp, readTotpSecret } from "../../bw/fields.ts";
+import { CliError, ExitCode } from "../errors.ts";
+import type { GlobalOptions } from "../types.ts";
+
+/** Seconds left below which `--fresh` waits, when the flag is given bare. */
+const DEFAULT_FRESH_SECONDS = 5;
 
 export function registerGet(program: Command): void {
 	program
@@ -10,8 +14,26 @@ export function registerGet(program: Command): void {
 		.description("Get a field from a vault item (built-in or custom)")
 		.argument("<field>", "Field: password | username | totp | notes | uri | item | <custom>")
 		.argument("<item>", "Item name or ID")
-		.action(async function (this: Command, field: string, item: string) {
+		.option(
+			"--fresh [seconds]",
+			`Wait for the next TOTP window if fewer than N seconds remain (default ${DEFAULT_FRESH_SECONDS})`,
+		)
+		.option("--seed", "Emit the stored TOTP secret instead of a code")
+		.action(async function (
+			this: Command,
+			field: string,
+			item: string,
+			localOpts: { fresh?: string | boolean; seed?: boolean },
+		) {
 			const opts = getGlobalOpts(this);
+
+			if (field === "totp") {
+				await emitTotp(item, localOpts, opts);
+				return;
+			}
+
+			assertTotpOnlyFlags(field, localOpts);
+
 			const value = await readItemField(field, item, opts);
 			// `item` is the one field that is itself JSON — emit it as structure.
 			emitData(field === "item" ? JSON.parse(value) : value, opts);
@@ -35,6 +57,83 @@ export function registerGet(program: Command): void {
 				throw withOrderHint(err);
 			}
 		});
+}
+
+/**
+ * Emits a TOTP alongside how long it stays valid. The remainder rides in the
+ * `--json` envelope's `meta` rather than replacing `data`, so `data` is still
+ * the plain code every other field returns and existing parsers keep working.
+ */
+async function emitTotp(
+	item: string,
+	localOpts: { fresh?: string | boolean; seed?: boolean },
+	opts: GlobalOptions,
+): Promise<void> {
+	if (localOpts.seed) {
+		if (localOpts.fresh !== undefined) {
+			throw new CliError(
+				"--seed and --fresh cannot be combined: a stored secret has no window.",
+				ExitCode.BadArgs,
+			);
+		}
+		emitData(await readTotpSecret(item, opts), opts);
+		return;
+	}
+
+	const threshold = parseFreshSeconds(localOpts.fresh);
+	let totp = await readTotp(item, opts);
+
+	if (threshold !== null && totp.secondsRemaining < threshold) {
+		const wait = totp.secondsRemaining;
+		emitLog(`Waiting ${wait}s for a fresh code…`, opts);
+		await Bun.sleep(wait * 1000 + 250);
+		totp = await readTotp(item, opts);
+	}
+
+	emitLog(`Valid for ${totp.secondsRemaining}s`, opts);
+	emitData(totp.code, opts, {
+		secondsRemaining: totp.secondsRemaining,
+		period: totp.period,
+	});
+}
+
+/**
+ * `--fresh` is a bare flag by default and takes an explicit threshold when the
+ * caller needs longer than {@link DEFAULT_FRESH_SECONDS} to use the code.
+ */
+function parseFreshSeconds(raw: string | boolean | undefined): number | null {
+	if (raw === undefined || raw === false) return null;
+	if (raw === true) return DEFAULT_FRESH_SECONDS;
+
+	const value = Number(raw.trim());
+	if (!Number.isInteger(value) || value < 0) {
+		throw new CliError(
+			`Invalid --fresh "${raw}". Use a non-negative integer of seconds.`,
+			ExitCode.BadArgs,
+		);
+	}
+	return value;
+}
+
+/**
+ * Accepting `--fresh` on a password would read as "give me a fresh password",
+ * which is not what it does. Rejecting it beats quietly ignoring it.
+ */
+function assertTotpOnlyFlags(
+	field: string,
+	localOpts: { fresh?: string | boolean; seed?: boolean },
+): void {
+	const used = [
+		localOpts.fresh !== undefined ? "--fresh" : null,
+		localOpts.seed ? "--seed" : null,
+	].filter((flag): flag is string => flag !== null);
+
+	if (used.length > 0) {
+		throw new CliError(
+			`${used.join(", ")} ${used.length > 1 ? "apply" : "applies"} to 'get totp', not '${field}'.`,
+			ExitCode.BadArgs,
+		);
+	}
 }
 
 /**
