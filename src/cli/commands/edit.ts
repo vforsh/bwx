@@ -27,6 +27,7 @@ interface EditOptions extends ItemTextInputs {
 	addFieldFile: string[];
 	addFieldEnv: string[];
 	rmField: string[];
+	rmTotp?: boolean;
 	folder?: string;
 	favorite?: boolean;
 	fromJson?: boolean;
@@ -40,6 +41,11 @@ const LOGIN_ONLY_FLAGS: Array<[keyof EditOptions, string]> = [
 	["passwordFile", "--password-file"],
 	["passwordEnv", "--password-env"],
 	["passwordGenerate", "--password-generate"],
+	["totp", "--totp"],
+	["totpStdin", "--totp-stdin"],
+	["totpFile", "--totp-file"],
+	["totpEnv", "--totp-env"],
+	["rmTotp", "--rm-totp"],
 ];
 
 export function registerEdit(program: Command): void {
@@ -57,6 +63,11 @@ export function registerEdit(program: Command): void {
 		.option("--password-env <name>", "Read password from environment variable")
 		.option("--password-generate", "Generate the password; it is never printed")
 		.option("--generate-length <n>", "Length for --password-generate", parseInt)
+		.option("--totp <secret>", "Set TOTP secret: base32 or otpauth:// URI")
+		.option("--totp-stdin", "Read the TOTP secret from stdin")
+		.option("--totp-file <path>", "Read the TOTP secret from file (use - for stdin)")
+		.option("--totp-env <name>", "Read the TOTP secret from environment variable")
+		.option("--rm-totp", "Remove the stored TOTP secret")
 		.option("--uri <url>", "Set URIs (repeatable, replaces all)", collect, [])
 		.option("--add-field <kv>", "Add/update field k=v", collect, [])
 		.option("--add-field-file <kv>", "Add/update field value from file k=path", collect, [])
@@ -91,6 +102,7 @@ export function registerEdit(program: Command): void {
 					encoded = bwEncode(stdinText);
 				} else {
 					assertLoginFlags(localOpts, current);
+					assertTotpIntent(localOpts);
 
 					assertSingleStdinSource(
 						listExplicitStdinInputs({
@@ -119,6 +131,7 @@ export function registerEdit(program: Command): void {
 						notes: textInputs.notes,
 						username: localOpts.username,
 						password: textInputs.password,
+						totp: localOpts.rmTotp ? null : textInputs.totp,
 						uris: localOpts.uri.length > 0 ? localOpts.uri : undefined,
 						addFields,
 						rmFields: localOpts.rmField,
@@ -143,6 +156,28 @@ export function registerEdit(program: Command): void {
 				emitSuccess(`Updated "${updated.name}" (${updated.id})${note}`, opts);
 			}
 		});
+}
+
+/**
+ * Setting and clearing the same secret in one call has no sensible winner, and
+ * picking one silently would either drop a seed or fail to remove one.
+ */
+function assertTotpIntent(localOpts: EditOptions): void {
+	if (!localOpts.rmTotp) return;
+
+	const setters = [
+		localOpts.totp !== undefined ? "--totp" : null,
+		localOpts.totpStdin ? "--totp-stdin" : null,
+		localOpts.totpFile !== undefined ? "--totp-file" : null,
+		localOpts.totpEnv !== undefined ? "--totp-env" : null,
+	].filter((flag): flag is string => flag !== null);
+
+	if (setters.length > 0) {
+		throw new CliError(
+			`--rm-totp cannot be combined with ${setters.join(", ")}.`,
+			ExitCode.BadArgs,
+		);
+	}
 }
 
 /**

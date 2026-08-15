@@ -146,6 +146,39 @@ describe("resolveItemTextInputs", () => {
 			),
 		).rejects.toThrow(CliError);
 	});
+
+	test("normalizes a TOTP secret on its way in", async () => {
+		const result = await resolveItemTextInputs(
+			{ totp: " gezd gnbv-gy3t qojq " },
+			new StdinReader(),
+		);
+		expect(result.totp).toBe("GEZDGNBVGY3TQOJQ");
+	});
+
+	test("reads a TOTP secret from the environment, keeping it out of argv", async () => {
+		process.env.BWX_TEST_TOTP = "GEZDGNBVGY3TQOJQ";
+		const result = await resolveItemTextInputs(
+			{ totpEnv: "BWX_TEST_TOTP" },
+			new StdinReader(),
+		);
+		expect(result.totp).toBe("GEZDGNBVGY3TQOJQ");
+	});
+
+	test("rejects a malformed TOTP secret before it reaches the vault", async () => {
+		expect(
+			resolveItemTextInputs({ totp: "not base32!" }, new StdinReader()),
+		).rejects.toThrow(CliError);
+	});
+
+	test("rejects two TOTP sources at once", async () => {
+		process.env.BWX_TEST_TOTP = "GEZDGNBVGY3TQOJQ";
+		expect(
+			resolveItemTextInputs(
+				{ totp: "GEZDGNBVGY3TQOJQ", totpEnv: "BWX_TEST_TOTP" },
+				new StdinReader(),
+			),
+		).rejects.toThrow(CliError);
+	});
 });
 
 describe("stdin source validation", () => {

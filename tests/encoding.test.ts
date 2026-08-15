@@ -84,6 +84,15 @@ describe("buildNewItem", () => {
 		expect(item.secureNote).toBeUndefined();
 	});
 
+	test("stores a TOTP secret on a login", () => {
+		const item = buildNewItem({
+			type: "login",
+			name: "GitHub",
+			totp: "GEZDGNBVGY3TQOJQ",
+		});
+		expect((item.login as Record<string, unknown>).totp).toBe("GEZDGNBVGY3TQOJQ");
+	});
+
 	test("defaults to note type", () => {
 		const item = buildNewItem({ name: "X" });
 		expect(item.type).toBe(2);
@@ -137,6 +146,24 @@ describe("patchItem", () => {
 		const login = patched.login as Record<string, unknown>;
 		expect(login.username).toBe("newuser");
 		expect(login.password).toBe("newpass");
+	});
+
+	test("sets a TOTP secret without touching the rest of the login", () => {
+		const login = patchItem(base, { totp: "GEZDGNBVGY3TQOJQ" })
+			.login as Record<string, unknown>;
+		expect(login.totp).toBe("GEZDGNBVGY3TQOJQ");
+		expect(login.username).toBe("user");
+		expect(login.password).toBe("pass");
+	});
+
+	test("distinguishes clearing a TOTP from leaving it alone", () => {
+		const withTotp = { ...base, login: { ...base.login, totp: "GEZDGNBVGY3TQOJQ" } };
+
+		const cleared = patchItem(withTotp, { totp: null }).login as Record<string, unknown>;
+		expect(cleared.totp).toBeNull();
+
+		const untouched = patchItem(withTotp, { name: "New" }).login as Record<string, unknown>;
+		expect(untouched.totp).toBe("GEZDGNBVGY3TQOJQ");
 	});
 
 	test("replaces URIs", () => {

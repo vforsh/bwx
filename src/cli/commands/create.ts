@@ -41,6 +41,10 @@ const LOGIN_ONLY_FLAGS: Array<[keyof CreateOptions, string]> = [
 	["passwordFile", "--password-file"],
 	["passwordEnv", "--password-env"],
 	["passwordGenerate", "--password-generate"],
+	["totp", "--totp"],
+	["totpStdin", "--totp-stdin"],
+	["totpFile", "--totp-file"],
+	["totpEnv", "--totp-env"],
 ];
 
 export function registerCreate(program: Command): void {
@@ -58,6 +62,10 @@ export function registerCreate(program: Command): void {
 		.option("--password-env <name>", "Read password from environment variable")
 		.option("--password-generate", "Generate the password; it is never printed")
 		.option("--generate-length <n>", "Length for --password-generate", parseInt)
+		.option("--totp <secret>", "TOTP secret: base32 or otpauth:// URI (login type)")
+		.option("--totp-stdin", "Read the TOTP secret from stdin")
+		.option("--totp-file <path>", "Read the TOTP secret from file (use - for stdin)")
+		.option("--totp-env <name>", "Read the TOTP secret from environment variable")
 		.option("--uri <url>", "URI (repeatable)", collect, [])
 		.option("--field <kv>", "Custom field k=v (repeatable)", collect, [])
 		.option("--field-file <kv>", "Custom field value from file k=path (repeatable)", collect, [])
@@ -139,6 +147,7 @@ export function registerCreate(program: Command): void {
 					notes: notes ?? null,
 					username: localOpts.username ?? null,
 					password: textInputs.password ?? null,
+					totp: textInputs.totp ?? null,
 					uris: localOpts.uri,
 					fields,
 					folderId: localOpts.folder

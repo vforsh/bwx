@@ -1,4 +1,5 @@
 import { parseFieldFlag, type ParsedField } from "../bw/encoding.ts";
+import { normalizeTotpInput } from "../bw/totp.ts";
 import { CliError, ExitCode } from "./errors.ts";
 
 export function collect(val: string, prev: string[]): string[] {
@@ -59,6 +60,10 @@ export interface ItemTextInputs {
 	passwordFile?: string;
 	passwordEnv?: string;
 	passwordGenerate?: boolean;
+	totp?: string;
+	totpStdin?: boolean;
+	totpFile?: string;
+	totpEnv?: string;
 }
 
 export interface ResolvedItemTextInputs {
@@ -66,6 +71,8 @@ export interface ResolvedItemTextInputs {
 	password?: string;
 	/** True when the password was generated, so callers can keep it unprinted. */
 	passwordGenerated?: boolean;
+	/** Normalized and validated by {@link normalizeTotpInput} before it is stored. */
+	totp?: string;
 }
 
 export interface ExplicitStdinInputs extends ItemTextInputs {
@@ -81,6 +88,7 @@ const PASSWORD_SOURCE_FLAGS = [
 	"--password-env",
 	"--password-generate",
 ];
+const TOTP_SOURCE_FLAGS = ["--totp", "--totp-stdin", "--totp-file", "--totp-env"];
 
 export async function resolveItemTextInputs(
 	inputs: ItemTextInputs,
@@ -89,7 +97,7 @@ export async function resolveItemTextInputs(
 ): Promise<ResolvedItemTextInputs> {
 	assertSingleStdinSource(listExplicitStdinInputs(inputs));
 
-	const [notes, password] = await Promise.all([
+	const [notes, password, totp] = await Promise.all([
 		resolveOptionalTextSource(
 			{
 				label: "notes",
@@ -115,12 +123,26 @@ export async function resolveItemTextInputs(
 			},
 			stdin,
 		),
+		resolveOptionalTextSource(
+			{
+				label: "TOTP secret",
+				inline: inputs.totp,
+				stdin: inputs.totpStdin,
+				file: inputs.totpFile,
+				env: inputs.totpEnv,
+				flagNames: TOTP_SOURCE_FLAGS,
+			},
+			stdin,
+		),
 	]);
 
 	return {
 		notes,
 		password,
 		passwordGenerated: inputs.passwordGenerate ?? false,
+		// Validated here rather than at the call sites so every write path gets
+		// the check: a malformed seed is only ever noticed at the login it breaks.
+		totp: totp === undefined ? undefined : normalizeTotpInput(totp),
 	};
 }
 
@@ -129,6 +151,8 @@ export function listExplicitStdinInputs(inputs: ExplicitStdinInputs): string[] {
 		inputs.notesFile === "-" ? "--notes-file -" : null,
 		inputs.passwordStdin ? "--password-stdin" : null,
 		inputs.passwordFile === "-" ? "--password-file -" : null,
+		inputs.totpStdin ? "--totp-stdin" : null,
+		inputs.totpFile === "-" ? "--totp-file -" : null,
 		...(inputs.fieldFileFlag && inputs.fieldFiles
 			? stdinSourcesForFieldFiles(inputs.fieldFileFlag, inputs.fieldFiles)
 			: []),

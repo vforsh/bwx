@@ -40,6 +40,7 @@ export interface NewItemOptions {
 	notes?: string | null;
 	username?: string | null;
 	password?: string | null;
+	totp?: string | null;
 	uris?: string[];
 	fields?: ParsedField[];
 	folderId?: string | null;
@@ -65,7 +66,7 @@ export function buildNewItem(options: NewItemOptions): Record<string, unknown> {
 		item.login = {
 			username: options.username ?? null,
 			password: options.password ?? null,
-			totp: null,
+			totp: options.totp ?? null,
 			uris: options.uris?.length
 				? options.uris.map((uri) => ({ match: null, uri }))
 				: null,
@@ -95,6 +96,8 @@ export interface PatchOptions {
 	notes?: string;
 	username?: string;
 	password?: string;
+	/** `null` clears the stored secret; `undefined` leaves it alone. */
+	totp?: string | null;
 	uris?: string[];
 	addFields?: ParsedField[];
 	rmFields?: string[];
@@ -115,12 +118,18 @@ export function patchItem(
 	if (patch.favorite !== undefined) result.favorite = patch.favorite;
 
 	// Login fields
-	if (patch.username !== undefined || patch.password !== undefined || patch.uris !== undefined) {
+	if (
+		patch.username !== undefined ||
+		patch.password !== undefined ||
+		patch.totp !== undefined ||
+		patch.uris !== undefined
+	) {
 		// Copied, not aliased: `{ ...item }` above is shallow, so assigning into
 		// the original `login` would edit the caller's item as a side effect.
 		const login = { ...((result.login as Record<string, unknown>) ?? {}) };
 		if (patch.username !== undefined) login.username = patch.username;
 		if (patch.password !== undefined) login.password = patch.password;
+		if (patch.totp !== undefined) login.totp = patch.totp;
 		if (patch.uris !== undefined) {
 			login.uris = patch.uris.map((uri) => ({ match: null, uri }));
 		}
