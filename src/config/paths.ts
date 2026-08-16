@@ -8,5 +8,7 @@ export const CONFIG_DIR = `${CONFIG_HOME}/bwx`;
 export const CONFIG_FILE = `${CONFIG_DIR}/config.json`;
 /** Cached `bw` session token (owner-only). */
 export const SESSION_FILE = `${CONFIG_DIR}/session`;
+/** Cross-process gate used only while establishing a session. */
+export const SESSION_LOCK_DIR = `${CONFIG_DIR}/session.lock`;
 /** Cached vault-freshness snapshot — see bw/freshness.ts. */
 export const STATE_FILE = `${CONFIG_DIR}/state.json`;

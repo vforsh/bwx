@@ -17,7 +17,7 @@ Bitwarden CLI wrapper for AI agents (`bwx` = `bw extended`). Auto-unlock, sessio
 The native `bw` CLI requires interactive prompts and manual session management. `bwx` wraps it with:
 
 - **Auto-unlock** — first vault command authenticates automatically via macOS Keychain
-- **Session caching** — token written atomically as mode 600 to `~/.config/bwx/session`, passed to `bw` through `BW_SESSION` so it never appears in a process command line
+- **Session caching** — token written atomically as mode 600 to `~/.config/bwx/session`; concurrent callers share one bounded login/unlock attempt, and the token reaches `bw` through `BW_SESSION` rather than a process command line
 - **Structured output** — `--json` and `--plain` flags for machine-parseable output
 - **Leak-resistant** — listings never print secrets, `bwx run` hands them to a child process instead of stdout
 - **No interaction** — credentials from config + Keychain, never prompts

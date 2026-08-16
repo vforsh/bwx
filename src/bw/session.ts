@@ -2,9 +2,16 @@ import { unlinkSync } from "node:fs";
 import { CliError, ExitCode } from "../cli/errors.ts";
 import type { GlobalOptions } from "../cli/types.ts";
 import { emitLog, emitWarn } from "../cli/io.ts";
-import { SESSION_FILE } from "../config/paths.ts";
+import { SESSION_FILE, SESSION_LOCK_DIR } from "../config/paths.ts";
+import { withProcessLock } from "../config/process-lock.ts";
 import { readPrivateFile, writePrivateFile } from "../config/secure-file.ts";
-import { runBw, runBwOrThrow, setSession, getSession } from "./runner.ts";
+import {
+	DEFAULT_TIMEOUT_MS,
+	runBw,
+	runBwOrThrow,
+	setSession,
+	getSession,
+} from "./runner.ts";
 import { checkVaultFreshness } from "./freshness.ts";
 import { getStatus } from "./status.ts";
 import { BwStatusSchema } from "./types.ts";
@@ -96,13 +103,36 @@ export async function probeSessionState(
 }
 
 export async function ensureUnlocked(opts: GlobalOptions): Promise<void> {
-	// Try cached session first
+	// Keep the ordinary valid-session path entirely outside the process lock.
 	const cached = getSession() || loadCachedSession(opts);
 	if (cached) {
 		setSession(cached);
 		if (await sessionWorks(cached)) return;
+		setSession(null);
 	}
 
+	await withProcessLock(
+		{
+			path: SESSION_LOCK_DIR,
+			label: "Bitwarden session establishment",
+			waitMs: sessionLockWaitMs(opts),
+		},
+		async () => {
+			// A process that waited must use the winner's disk cache, not the stale
+			// token it may still have held in memory before entering the lock.
+			const winner = loadCachedSession(opts);
+			if (winner) {
+				setSession(winner);
+				if (await sessionWorks(winner)) return;
+				setSession(null);
+			}
+
+			await establishSession(opts);
+		},
+	);
+}
+
+async function establishSession(opts: GlobalOptions): Promise<void> {
 	const status = await getStatus();
 
 	if (status.status === "unlocked") {
@@ -152,6 +182,13 @@ export async function ensureUnlocked(opts: GlobalOptions): Promise<void> {
 	saveCachedSession(token);
 }
 
+/** Four sequential `bw` calls cover stale validation plus status/login/unlock. */
+function sessionLockWaitMs(opts: GlobalOptions): number {
+	const perCall =
+		opts.timeoutMs && opts.timeoutMs > 0 ? opts.timeoutMs : DEFAULT_TIMEOUT_MS;
+	return Math.min(Math.max(perCall * 4 + 10_000, 10_000), 5 * 60_000);
+}
+
 export async function lockVault(): Promise<void> {
 	await runBw(["lock"], { session: null });
 	setSession(null);
@@ -197,9 +234,9 @@ async function withAuthRetry<T>(
 		return await fn();
 	} catch (err) {
 		if (err instanceof CliError && err.exitCode === ExitCode.AuthFailed) {
-			// Clear stale session and re-auth
+			// Do not unlink the shared cache here: another process may already have
+			// atomically replaced our stale token with a freshly unlocked session.
 			setSession(null);
-			clearCachedSession();
 			await ensureUnlocked(opts);
 			return await fn();
 		}
