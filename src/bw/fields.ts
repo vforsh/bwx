@@ -67,7 +67,8 @@ export async function readItemField(
 ): Promise<string> {
 	return withLookupHelp(item, opts, async () => {
 		if (isTotpField(field, options)) {
-			return (await resolveTotp(await fetchItem(item, opts), item, opts)).code;
+			const nextCode = resolveTotpSource(await fetchItem(item, opts), item, opts);
+			return (await nextCode()).code;
 		}
 
 		return isBuiltinField(field) && !options?.customOnly
@@ -76,18 +77,31 @@ export async function readItemField(
 	});
 }
 
+export interface ReadTotpOptions {
+	/**
+	 * Wait for the next window when the code has fewer than this many seconds
+	 * left, rather than handing back one that expires on the way to the prompt.
+	 */
+	minSecondsRemaining?: number;
+	/** Notified with the seconds about to be spent waiting, for progress output. */
+	onWait?: (seconds: number) => void;
+}
+
 /**
  * Reads a TOTP with the time it has left. A code handed over with three seconds
- * on it is usually dead before it is pasted, so callers need the remainder to
- * decide whether to wait for the next window.
+ * on it is usually dead before it is pasted, so callers get the remainder to
+ * decide for themselves — or set `minSecondsRemaining` and have the wait handled
+ * here, where the secret is still in hand and a fresh code is free.
  */
 export async function readTotp(
 	item: string,
 	opts: GlobalOptions,
+	options?: ReadTotpOptions,
 ): Promise<TotpCode> {
-	return withLookupHelp(item, opts, async () =>
-		resolveTotp(await fetchItem(item, opts), item, opts),
-	);
+	return withLookupHelp(item, opts, async () => {
+		const nextCode = resolveTotpSource(await fetchItem(item, opts), item, opts);
+		return awaitUsableWindow(nextCode, options);
+	});
 }
 
 /** The stored secret itself, for moving a seed back out to another authenticator. */
@@ -113,29 +127,58 @@ function requireStoredTotp(item: BwItem): string {
 }
 
 /**
- * Computes the code from the secret already in hand, falling back to `bw get
- * totp` for the shapes this codebase will not compute itself (see `totp.ts`).
- * The fallback costs a second spawn, which is the correct trade against
- * emitting a confidently wrong six digits.
+ * Produces a code for the current window. Callable rather than a single resolved
+ * value so waiting out a nearly-dead window is cheap: the local path just runs
+ * the HMAC again over the secret it captured.
  */
-async function resolveTotp(
+type TotpSource = () => Promise<TotpCode>;
+
+/**
+ * Decides how this item's codes are computed: locally from the secret already in
+ * hand, or by `bw get totp` for the shapes this codebase will not compute itself
+ * (see `totp.ts`). The fallback costs a spawn per code, which is the correct
+ * trade against emitting a confidently wrong six digits.
+ */
+function resolveTotpSource(
 	fetched: BwItem,
 	item: string,
 	opts: GlobalOptions,
-): Promise<TotpCode> {
+): TotpSource {
 	const stored = requireStoredTotp(fetched);
 
 	try {
-		return generateTotp(parseTotpSecret(stored));
+		const config = parseTotpSecret(stored);
+		return async () => generateTotp(config);
 	} catch (err) {
 		if (!(err instanceof TotpUnsupportedError)) throw err;
-
-		return {
-			code: await readBuiltinField("totp", item, opts),
-			period: DEFAULT_PERIOD,
-			secondsRemaining: secondsRemaining(DEFAULT_PERIOD),
-		};
 	}
+
+	return async () => ({
+		code: await readBuiltinField("totp", item, opts),
+		period: DEFAULT_PERIOD,
+		secondsRemaining: secondsRemaining(DEFAULT_PERIOD),
+	});
+}
+
+/**
+ * Sleeps out a window with too little left, then asks the source for the next
+ * code. Only the `bw` fallback pays a second spawn for that; the local path
+ * recomputes from the secret it holds, so the returned code has a full window
+ * rather than one already spent on a second vault round-trip.
+ */
+async function awaitUsableWindow(
+	nextCode: TotpSource,
+	options?: ReadTotpOptions,
+): Promise<TotpCode> {
+	const code = await nextCode();
+
+	const minimum = options?.minSecondsRemaining;
+	if (minimum === undefined || code.secondsRemaining >= minimum) return code;
+
+	options?.onWait?.(code.secondsRemaining);
+	// The extra beat lands just past the boundary rather than exactly on it.
+	await Bun.sleep(code.secondsRemaining * 1000 + 250);
+	return nextCode();
 }
 
 /**
@@ -169,10 +212,8 @@ export async function readFields(
 			const request = requests[index]!;
 
 			if (isTotpField(request.field, request.options)) {
-				const totp = await withLookupHelp(item, opts, () =>
-					resolveTotp(fetched, item, opts),
-				);
-				values[index] = totp.code;
+				const nextCode = resolveTotpSource(fetched, item, opts);
+				values[index] = (await withLookupHelp(item, opts, nextCode)).code;
 			} else {
 				values[index] = extractField(fetched, request.field, request.options);
 			}

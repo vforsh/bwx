@@ -80,15 +80,11 @@ async function emitTotp(
 		return;
 	}
 
-	const threshold = parseFreshSeconds(localOpts.fresh);
-	let totp = await readTotp(item, opts);
-
-	if (threshold !== null && totp.secondsRemaining < threshold) {
-		const wait = totp.secondsRemaining;
-		emitLog(`Waiting ${wait}s for a fresh code…`, opts);
-		await Bun.sleep(wait * 1000 + 250);
-		totp = await readTotp(item, opts);
-	}
+	const totp = await readTotp(item, opts, {
+		minSecondsRemaining: parseFreshSeconds(localOpts.fresh),
+		onWait: (seconds) =>
+			emitLog(`Waiting ${seconds}s for a fresh code…`, opts),
+	});
 
 	emitLog(`Valid for ${totp.secondsRemaining}s`, opts);
 	emitData(totp.code, opts, {
@@ -101,8 +97,8 @@ async function emitTotp(
  * `--fresh` is a bare flag by default and takes an explicit threshold when the
  * caller needs longer than {@link DEFAULT_FRESH_SECONDS} to use the code.
  */
-function parseFreshSeconds(raw: string | boolean | undefined): number | null {
-	if (raw === undefined || raw === false) return null;
+function parseFreshSeconds(raw: string | boolean | undefined): number | undefined {
+	if (raw === undefined || raw === false) return undefined;
 	if (raw === true) return DEFAULT_FRESH_SECONDS;
 
 	const value = Number(raw.trim());
