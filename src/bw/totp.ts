@@ -81,6 +81,12 @@ export function parseTotpSecret(raw: string): TotpConfig {
 		throw new TotpUnsupportedError("secret is not base32");
 	}
 
+	// A returned config must be computable, so that generateTotp cannot fail on
+	// one and strand a caller that has already chosen the local path over the bw
+	// fallback. Base32 alone does not promise that: a single character carries
+	// five bits and decodes to no whole byte.
+	base32Decode(config.secret);
+
 	return config;
 }
 

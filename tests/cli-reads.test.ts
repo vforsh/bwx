@@ -79,6 +79,19 @@ describe("get totp", () => {
 		expect(loggedCalls(harness, "get-totp.log")).toBe(1);
 	});
 
+	test("defers to bw for a secret too short to key an HMAC", async () => {
+		// One base32 character carries five bits, so it parses but decodes to no
+		// whole byte. That belongs on the fallback path like any other shape this
+		// codebase will not compute, not surfaced as an internal failure.
+		const harness = warmHarness("A");
+
+		const result = await runCli(harness, ["--json", "get", "totp", "Test"]);
+
+		expect(result.exitCode).toBe(0);
+		expect(parseJson(result.stdout).data).toBe("999999");
+		expect(loggedCalls(harness, "get-totp.log")).toBe(1);
+	});
+
 	test("emits the stored secret with --seed", async () => {
 		const harness = warmHarness(FAST_SECRET);
 

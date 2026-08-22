@@ -137,10 +137,21 @@ describe("parseTotpSecret", () => {
 			"otpauth://totp/Acme?secret=not-base32!",
 			"not base32 either!",
 			"   ",
+			// Base32, but five bits: no whole byte to key an HMAC with.
+			"A",
+			"otpauth://totp/Acme?secret=A",
 		];
 
 		for (const raw of unsupported) {
 			expect(() => parseTotpSecret(raw)).toThrow(TotpUnsupportedError);
+		}
+	});
+
+	test("only returns configs that generateTotp can compute", () => {
+		// The contract the fallback path depends on: anything parseTotpSecret
+		// accepts, generateTotp must be able to turn into a code.
+		for (const raw of ["AB", "gezd gnbv-gy3t qojq", RFC_SHA1]) {
+			expect(() => generateTotp(parseTotpSecret(raw))).not.toThrow();
 		}
 	});
 });
