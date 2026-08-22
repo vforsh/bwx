@@ -105,6 +105,23 @@ describe("get totp", () => {
 	});
 });
 
+describe("stale session recovery", () => {
+	test("revalidates the rejected token only once", async () => {
+		const harness = createHarness({ fakeBw: FAKE_BW, session: "stale-session" });
+
+		const result = await runCli(harness, ["get", "password", "Test"]);
+
+		expect(result.exitCode).toBe(0);
+		expect(result.stdout).toBe("secret\n");
+		expect(readSession(harness)).toBe("fresh-session");
+		expect(loggedCalls(harness, "unlock.log")).toBe(1);
+		// One `bw status` to confirm the cached token is dead, one inside the lock
+		// to read vault state. The token is not interrogated a second time just
+		// because the unchanged cache was re-read after taking the lock.
+		expect(loggedCalls(harness, "status.log")).toBe(2);
+	});
+});
+
 const FAKE_BW = `#!/usr/bin/env bun
 import { appendFileSync } from "node:fs";
 import { join } from "node:path";

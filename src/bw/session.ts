@@ -119,9 +119,11 @@ export async function ensureUnlocked(opts: GlobalOptions): Promise<void> {
 		},
 		async () => {
 			// A process that waited must use the winner's disk cache, not the stale
-			// token it may still have held in memory before entering the lock.
+			// token it may still have held in memory before entering the lock. An
+			// unchanged cache needs no second `bw status`: we just watched that exact
+			// token be refused, and nothing has replaced it.
 			const winner = loadCachedSession(opts);
-			if (winner) {
+			if (winner && winner !== cached) {
 				setSession(winner);
 				if (await sessionWorks(winner)) return;
 				setSession(null);
