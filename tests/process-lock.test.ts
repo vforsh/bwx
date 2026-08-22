@@ -71,6 +71,30 @@ describe("withProcessLock", () => {
 		await holder;
 	});
 
+	test("reports a lock directory with no owner metadata as corrupt", async () => {
+		// The boundary for "released mid-inspection, contend again": a directory
+		// that is still the one just inspected but carries no readable owner file
+		// is genuinely broken, and must not be waited on or silently retried.
+		// It has to be non-empty, or publishing the new lock by rename would
+		// simply replace it — which is the right outcome for an empty leftover.
+		const path = `${tempDir()}/session.lock`;
+		mkdirSync(path, { mode: 0o700 });
+		writeFileSync(`${path}/unexpected`, "", { mode: 0o600 });
+		chmodSync(path, 0o700);
+
+		try {
+			await withProcessLock(
+				{ path, label: "test lock", waitMs: 50 },
+				async () => {},
+			);
+			throw new Error("expected missing owner metadata to be rejected");
+		} catch (err) {
+			expect(err).toBeInstanceOf(CliError);
+			expect((err as CliError).exitCode).toBe(ExitCode.Config);
+			expect((err as Error).message).toContain("is missing");
+		}
+	});
+
 	test("rejects an unsafe stale-owner token before deriving cleanup paths", async () => {
 		const root = tempDir();
 		const path = `${root}/session.lock`;

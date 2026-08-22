@@ -64,30 +64,40 @@ export async function withProcessLock<T>(
 
 async function acquire(options: ProcessLockOptions): Promise<Ownership> {
 	const startedAt = performance.now();
-	let holder: LockOwner | null = null;
 
 	while (true) {
 		const ownership = tryCreate(options.path);
 		if (ownership) return ownership;
 
-		holder = readOwner(options.path, options.label);
-		if (!holder) continue;
+		const holder = readOwner(options.path, options.label);
 
-		if (!isProcessAlive(holder.pid)) {
+		if (holder && !isProcessAlive(holder.pid)) {
 			if (detachAbandonedLock(options.path, holder, options.label)) continue;
 		}
 
+		// The deadline is checked even when the lock turned out to be free, so a
+		// peer that keeps taking and releasing it cannot spin us indefinitely.
 		const elapsed = performance.now() - startedAt;
-		if (elapsed >= options.waitMs) {
-			throw new CliError(
-				`Timed out after ${formatDuration(options.waitMs)} waiting for ${options.label} held by pid ${holder.pid}`,
-				ExitCode.Timeout,
-			);
-		}
+		if (elapsed >= options.waitMs) throw timedOut(options, holder);
+
+		// A lock that vanished mid-inspection is free: contend for it again at once
+		// rather than sleeping on a holder that is already gone.
+		if (!holder) continue;
 
 		const remaining = options.waitMs - elapsed;
 		await Bun.sleep(Math.min(options.pollMs ?? DEFAULT_POLL_MS, remaining));
 	}
+}
+
+function timedOut(
+	options: ProcessLockOptions,
+	holder: LockOwner | null,
+): CliError {
+	const held = holder ? ` held by pid ${holder.pid}` : "";
+	return new CliError(
+		`Timed out after ${formatDuration(options.waitMs)} waiting for ${options.label}${held}`,
+		ExitCode.Timeout,
+	);
 }
 
 function tryCreate(path: string): Ownership | null {
@@ -143,6 +153,14 @@ function readOwner(path: string, label: string): LockOwner | null {
 
 	const read = readPrivateFile(`${path}/${OWNER_FILE}`);
 	if (read.kind !== "ok") {
+		// A holder publishes `owner.json` before the directory is renamed into
+		// place, and lets go by renaming the whole directory away. So an owner file
+		// that would not read, under a directory that is no longer the one just
+		// inspected, means the holder released mid-read — the caller should contend
+		// again rather than report a corrupt lock. Only an unreadable owner file in
+		// the *same* directory is genuinely wrong.
+		if (inodeAt(path) !== stat.ino) return null;
+
 		const reason =
 			read.kind === "missing"
 				? `${path}/${OWNER_FILE} is missing`
@@ -242,6 +260,20 @@ function pathExists(path: string): boolean {
 		return true;
 	} catch (err) {
 		if (errorCode(err) === "ENOENT") return false;
+		throw err;
+	}
+}
+
+/**
+ * Identifies what currently sits at `path`, or `null` when nothing does. Compared
+ * against an earlier `stat` it answers "is this still the same directory?", which
+ * distinguishes a released lock from a corrupt one.
+ */
+function inodeAt(path: string): number | null {
+	try {
+		return lstatSync(path).ino;
+	} catch (err) {
+		if (errorCode(err) === "ENOENT") return null;
 		throw err;
 	}
 }
