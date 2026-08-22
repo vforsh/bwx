@@ -1,3 +1,4 @@
+import type { Command } from "commander";
 import { parseFieldFlag, type ParsedField } from "../bw/encoding.ts";
 import { normalizeTotpInput } from "../bw/totp.ts";
 import { CliError, ExitCode } from "./errors.ts";
@@ -80,15 +81,176 @@ export interface ExplicitStdinInputs extends ItemTextInputs {
 	fieldFiles?: string[];
 }
 
-const NOTE_SOURCE_FLAGS = ["--notes", "--notes-file"];
-const PASSWORD_SOURCE_FLAGS = [
-	"--password",
-	"--password-stdin",
-	"--password-file",
-	"--password-env",
-	"--password-generate",
-];
-const TOTP_SOURCE_FLAGS = ["--totp", "--totp-stdin", "--totp-file", "--totp-env"];
+/** Which slot of a {@link TextSource} a flag fills. */
+type TextSourceKind = "inline" | "stdin" | "file" | "env" | "generate";
+
+interface TextInputFlag {
+	/** Commander option spec, e.g. `--password-file <path>`. */
+	spec: string;
+	description: string;
+	/** The property commander derives from `spec`. */
+	key: keyof ItemTextInputs;
+	kind: TextSourceKind;
+}
+
+/**
+ * One value a caller can supply, and every flag that can supply it. Option
+ * registration, the "choose only one source" error, the stdin-conflict check and
+ * the login-only guard all read from here, so adding a source touches one table
+ * rather than both write commands and three hand-kept lists.
+ */
+export interface TextInputFamily {
+	/** Names the value in error messages. */
+	label: string;
+	flags: TextInputFlag[];
+	/** True when only a login item has anywhere to store the value. */
+	loginOnly: boolean;
+	/** Whether empty is a legitimate value — it is, for notes. */
+	allowEmpty?: boolean;
+}
+
+const NOTES_FAMILY: TextInputFamily = {
+	label: "notes",
+	loginOnly: false,
+	allowEmpty: true,
+	flags: [
+		{
+			spec: "--notes <text>",
+			description: "Notes content",
+			key: "notes",
+			kind: "inline",
+		},
+		{
+			spec: "--notes-file <path>",
+			description: "Read notes from file (use - for stdin)",
+			key: "notesFile",
+			kind: "file",
+		},
+	],
+};
+
+const PASSWORD_FAMILY: TextInputFamily = {
+	label: "password",
+	loginOnly: true,
+	flags: [
+		{
+			spec: "--password <pass>",
+			description: "Password (login items only)",
+			key: "password",
+			kind: "inline",
+		},
+		{
+			spec: "--password-stdin",
+			description: "Read password from stdin",
+			key: "passwordStdin",
+			kind: "stdin",
+		},
+		{
+			spec: "--password-file <path>",
+			description: "Read password from file (use - for stdin)",
+			key: "passwordFile",
+			kind: "file",
+		},
+		{
+			spec: "--password-env <name>",
+			description: "Read password from environment variable",
+			key: "passwordEnv",
+			kind: "env",
+		},
+		{
+			spec: "--password-generate",
+			description: "Generate the password; it is never printed",
+			key: "passwordGenerate",
+			kind: "generate",
+		},
+	],
+};
+
+export const TOTP_FAMILY: TextInputFamily = {
+	label: "TOTP secret",
+	loginOnly: true,
+	flags: [
+		{
+			spec: "--totp <secret>",
+			description: "TOTP secret: base32 or otpauth:// URI (login items only)",
+			key: "totp",
+			kind: "inline",
+		},
+		{
+			spec: "--totp-stdin",
+			description: "Read the TOTP secret from stdin",
+			key: "totpStdin",
+			kind: "stdin",
+		},
+		{
+			spec: "--totp-file <path>",
+			description: "Read the TOTP secret from file (use - for stdin)",
+			key: "totpFile",
+			kind: "file",
+		},
+		{
+			spec: "--totp-env <name>",
+			description: "Read the TOTP secret from environment variable",
+			key: "totpEnv",
+			kind: "env",
+		},
+	],
+};
+
+const ITEM_TEXT_FAMILIES = [NOTES_FAMILY, PASSWORD_FAMILY, TOTP_FAMILY];
+
+function flagName(spec: string): string {
+	return spec.split(" ")[0]!;
+}
+
+function sourceFlagNames(family: TextInputFamily): string[] {
+	return family.flags.map((flag) => flagName(flag.spec));
+}
+
+/**
+ * Registers every flag that can supply notes, a password, or a TOTP secret, plus
+ * the length modifier `--password-generate` takes. `create` and `edit` accept the
+ * identical set and {@link resolveItemTextInputs} is their only reader, so the
+ * set is declared once here instead of per command.
+ */
+export function registerItemTextOptions(command: Command): Command {
+	for (const family of ITEM_TEXT_FAMILIES) {
+		for (const flag of family.flags) {
+			command.option(flag.spec, flag.description);
+		}
+	}
+
+	return command.option(
+		"--generate-length <n>",
+		"Length for --password-generate",
+		(value) => Number.parseInt(value, 10),
+	);
+}
+
+/**
+ * The `[key, flag]` pairs a command must reject on a non-login item, because
+ * `buildNewItem` and `patchItem` have nowhere to put them and would accept the
+ * value only to drop it.
+ */
+export function loginOnlyTextInputFlags(): Array<[keyof ItemTextInputs, string]> {
+	return ITEM_TEXT_FAMILIES.filter((family) => family.loginOnly).flatMap(
+		(family) =>
+			family.flags.map(
+				(flag) =>
+					[flag.key, flagName(flag.spec)] as [keyof ItemTextInputs, string],
+			),
+	);
+}
+
+/** The flags a caller actually used to supply this family's value. */
+export function listUsedSourceFlags(
+	family: TextInputFamily,
+	inputs: ItemTextInputs,
+): string[] {
+	return family.flags
+		.filter((flag) => inputs[flag.key] !== undefined)
+		.map((flag) => flagName(flag.spec));
+}
 
 export async function resolveItemTextInputs(
 	inputs: ItemTextInputs,
@@ -100,17 +262,17 @@ export async function resolveItemTextInputs(
 	const [notes, password, totp] = await Promise.all([
 		resolveOptionalTextSource(
 			{
-				label: "notes",
+				label: NOTES_FAMILY.label,
 				inline: inputs.notes,
 				file: inputs.notesFile,
-				flagNames: NOTE_SOURCE_FLAGS,
-				allowEmpty: true,
+				flagNames: sourceFlagNames(NOTES_FAMILY),
+				allowEmpty: NOTES_FAMILY.allowEmpty,
 			},
 			stdin,
 		),
 		resolveOptionalTextSource(
 			{
-				label: "password",
+				label: PASSWORD_FAMILY.label,
 				inline: inputs.password,
 				stdin: inputs.passwordStdin,
 				file: inputs.passwordFile,
@@ -119,18 +281,18 @@ export async function resolveItemTextInputs(
 					inputs.passwordGenerate && generatePassword
 						? generatePassword
 						: undefined,
-				flagNames: PASSWORD_SOURCE_FLAGS,
+				flagNames: sourceFlagNames(PASSWORD_FAMILY),
 			},
 			stdin,
 		),
 		resolveOptionalTextSource(
 			{
-				label: "TOTP secret",
+				label: TOTP_FAMILY.label,
 				inline: inputs.totp,
 				stdin: inputs.totpStdin,
 				file: inputs.totpFile,
 				env: inputs.totpEnv,
-				flagNames: TOTP_SOURCE_FLAGS,
+				flagNames: sourceFlagNames(TOTP_FAMILY),
 			},
 			stdin,
 		),
@@ -147,16 +309,26 @@ export async function resolveItemTextInputs(
 }
 
 export function listExplicitStdinInputs(inputs: ExplicitStdinInputs): string[] {
-	return [
-		inputs.notesFile === "-" ? "--notes-file -" : null,
-		inputs.passwordStdin ? "--password-stdin" : null,
-		inputs.passwordFile === "-" ? "--password-file -" : null,
-		inputs.totpStdin ? "--totp-stdin" : null,
-		inputs.totpFile === "-" ? "--totp-file -" : null,
-		...(inputs.fieldFileFlag && inputs.fieldFiles
-			? stdinSourcesForFieldFiles(inputs.fieldFileFlag, inputs.fieldFiles)
-			: []),
-	].filter((value): value is string => value !== null);
+	const sources: string[] = [];
+
+	for (const family of ITEM_TEXT_FAMILIES) {
+		for (const flag of family.flags) {
+			const name = flagName(flag.spec);
+			if (flag.kind === "stdin" && inputs[flag.key]) {
+				sources.push(name);
+			} else if (flag.kind === "file" && inputs[flag.key] === "-") {
+				sources.push(`${name} -`);
+			}
+		}
+	}
+
+	if (inputs.fieldFileFlag && inputs.fieldFiles) {
+		sources.push(
+			...stdinSourcesForFieldFiles(inputs.fieldFileFlag, inputs.fieldFiles),
+		);
+	}
+
+	return sources;
 }
 
 export async function resolveOptionalTextSource(

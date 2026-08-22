@@ -3,14 +3,18 @@ import { unlink } from "node:fs/promises";
 import {
 	assertSingleStdinSource,
 	listExplicitStdinInputs,
+	listUsedSourceFlags,
+	loginOnlyTextInputFlags,
 	resolveFieldSources,
 	resolveItemTextInputs,
 	resolveOptionalTextSource,
 	StdinReader,
+	TOTP_FAMILY,
 } from "../src/cli/input.ts";
+import { buildProgram } from "../src/cli/program.ts";
 import { CliError, ExitCode } from "../src/cli/errors.ts";
 
-const ENV_NAMES = ["BWX_TEST_PASSWORD", "BWX_TEST_FIELD"];
+const ENV_NAMES = ["BWX_TEST_PASSWORD", "BWX_TEST_FIELD", "BWX_TEST_TOTP"];
 
 afterEach(() => {
 	for (const name of ENV_NAMES) {
@@ -178,6 +182,67 @@ describe("resolveItemTextInputs", () => {
 				new StdinReader(),
 			),
 		).rejects.toThrow(CliError);
+	});
+});
+
+describe("item text input flags", () => {
+	/** Every flag `create` and `edit` must both accept, from one shared table. */
+	const SHARED_FLAGS = [
+		"--notes",
+		"--notes-file",
+		"--password",
+		"--password-stdin",
+		"--password-file",
+		"--password-env",
+		"--password-generate",
+		"--generate-length",
+		"--totp",
+		"--totp-stdin",
+		"--totp-file",
+		"--totp-env",
+	];
+
+	function optionNames(commandName: string): string[] {
+		const command = buildProgram().commands.find(
+			(candidate) => candidate.name() === commandName,
+		);
+		if (!command) throw new Error(`no ${commandName} command`);
+		return command.options.map((option) => option.long ?? option.short ?? "");
+	}
+
+	test("create and edit accept the identical set", () => {
+		expect(optionNames("create")).toEqual(expect.arrayContaining(SHARED_FLAGS));
+		expect(optionNames("edit")).toEqual(expect.arrayContaining(SHARED_FLAGS));
+	});
+
+	test("treats password and TOTP sources as login-only, but not notes", () => {
+		const flags = loginOnlyTextInputFlags().map(([, flag]) => flag);
+
+		expect(flags).toContain("--password");
+		expect(flags).toContain("--password-generate");
+		expect(flags).toContain("--totp");
+		expect(flags).toContain("--totp-env");
+		expect(flags).not.toContain("--notes");
+		expect(flags).not.toContain("--notes-file");
+		// A length modifier, not a value a note would have nowhere to store.
+		expect(flags).not.toContain("--generate-length");
+	});
+
+	test("every login-only flag is a real option on both commands", () => {
+		const flags = loginOnlyTextInputFlags().map(([, flag]) => flag);
+
+		expect(optionNames("create")).toEqual(expect.arrayContaining(flags));
+		expect(optionNames("edit")).toEqual(expect.arrayContaining(flags));
+	});
+
+	test("names only the sources a caller actually used", () => {
+		expect(
+			listUsedSourceFlags(TOTP_FAMILY, { totpEnv: "NAME", password: "pw" }),
+		).toEqual(["--totp-env"]);
+		expect(listUsedSourceFlags(TOTP_FAMILY, { totpStdin: true })).toEqual([
+			"--totp-stdin",
+		]);
+		expect(listUsedSourceFlags(TOTP_FAMILY, {})).toEqual([]);
 	});
 });
 

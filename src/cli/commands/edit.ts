@@ -12,9 +12,13 @@ import {
 	assertSingleStdinSource,
 	collect,
 	listExplicitStdinInputs,
+	listUsedSourceFlags,
+	loginOnlyTextInputFlags,
+	registerItemTextOptions,
 	resolveFieldSources,
 	resolveItemTextInputs,
 	StdinReader,
+	TOTP_FAMILY,
 	type ItemTextInputs,
 } from "../input.ts";
 import { redactGeneratedPassword } from "./generate.ts";
@@ -36,37 +40,19 @@ interface EditOptions extends ItemTextInputs {
 
 const LOGIN_ONLY_FLAGS: Array<[keyof EditOptions, string]> = [
 	["username", "--username"],
-	["password", "--password"],
-	["passwordStdin", "--password-stdin"],
-	["passwordFile", "--password-file"],
-	["passwordEnv", "--password-env"],
-	["passwordGenerate", "--password-generate"],
-	["totp", "--totp"],
-	["totpStdin", "--totp-stdin"],
-	["totpFile", "--totp-file"],
-	["totpEnv", "--totp-env"],
+	...loginOnlyTextInputFlags(),
 	["rmTotp", "--rm-totp"],
 ];
 
 export function registerEdit(program: Command): void {
-	program
+	const command = program
 		.command("edit")
 		.description("Edit an existing vault item")
 		.argument("<item>", "Item name or ID")
 		.option("--name <name>", "New name")
-		.option("--notes <text>", "New notes")
-		.option("--notes-file <path>", "Read notes from file (use - for stdin)")
-		.option("--username <user>", "New username")
-		.option("--password <pass>", "New password")
-		.option("--password-stdin", "Read password from stdin")
-		.option("--password-file <path>", "Read password from file (use - for stdin)")
-		.option("--password-env <name>", "Read password from environment variable")
-		.option("--password-generate", "Generate the password; it is never printed")
-		.option("--generate-length <n>", "Length for --password-generate", parseInt)
-		.option("--totp <secret>", "Set TOTP secret: base32 or otpauth:// URI")
-		.option("--totp-stdin", "Read the TOTP secret from stdin")
-		.option("--totp-file <path>", "Read the TOTP secret from file (use - for stdin)")
-		.option("--totp-env <name>", "Read the TOTP secret from environment variable")
+		.option("--username <user>", "New username");
+
+	registerItemTextOptions(command)
 		.option("--rm-totp", "Remove the stored TOTP secret")
 		.option("--uri <url>", "Set URIs (repeatable, replaces all)", collect, [])
 		.option("--add-field <kv>", "Add/update field k=v", collect, [])
@@ -165,12 +151,7 @@ export function registerEdit(program: Command): void {
 function assertTotpIntent(localOpts: EditOptions): void {
 	if (!localOpts.rmTotp) return;
 
-	const setters = [
-		localOpts.totp !== undefined ? "--totp" : null,
-		localOpts.totpStdin ? "--totp-stdin" : null,
-		localOpts.totpFile !== undefined ? "--totp-file" : null,
-		localOpts.totpEnv !== undefined ? "--totp-env" : null,
-	].filter((flag): flag is string => flag !== null);
+	const setters = listUsedSourceFlags(TOTP_FAMILY, localOpts);
 
 	if (setters.length > 0) {
 		throw new CliError(

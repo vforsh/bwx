@@ -11,7 +11,9 @@ import {
 	assertSingleStdinSource,
 	collect,
 	listExplicitStdinInputs,
+	loginOnlyTextInputFlags,
 	readOptionalStdin,
+	registerItemTextOptions,
 	resolveFieldSources,
 	resolveItemTextInputs,
 	StdinReader,
@@ -36,36 +38,18 @@ interface CreateOptions extends ItemTextInputs {
 /** Flags a secure note has nowhere to store — see {@link assertLoginFlags}. */
 const LOGIN_ONLY_FLAGS: Array<[keyof CreateOptions, string]> = [
 	["username", "--username"],
-	["password", "--password"],
-	["passwordStdin", "--password-stdin"],
-	["passwordFile", "--password-file"],
-	["passwordEnv", "--password-env"],
-	["passwordGenerate", "--password-generate"],
-	["totp", "--totp"],
-	["totpStdin", "--totp-stdin"],
-	["totpFile", "--totp-file"],
-	["totpEnv", "--totp-env"],
+	...loginOnlyTextInputFlags(),
 ];
 
 export function registerCreate(program: Command): void {
-	program
+	const command = program
 		.command("create").alias("add")
 		.description("Create a new vault item")
 		.option("--type <type>", "Item type: login|note", "note")
 		.option("--name <name>", "Item name")
-		.option("--notes <text>", "Notes content")
-		.option("--notes-file <path>", "Read notes from file (use - for stdin)")
-		.option("--username <user>", "Username (login type)")
-		.option("--password <pass>", "Password (login type)")
-		.option("--password-stdin", "Read password from stdin")
-		.option("--password-file <path>", "Read password from file (use - for stdin)")
-		.option("--password-env <name>", "Read password from environment variable")
-		.option("--password-generate", "Generate the password; it is never printed")
-		.option("--generate-length <n>", "Length for --password-generate", parseInt)
-		.option("--totp <secret>", "TOTP secret: base32 or otpauth:// URI (login type)")
-		.option("--totp-stdin", "Read the TOTP secret from stdin")
-		.option("--totp-file <path>", "Read the TOTP secret from file (use - for stdin)")
-		.option("--totp-env <name>", "Read the TOTP secret from environment variable")
+		.option("--username <user>", "Username (login items only)");
+
+	registerItemTextOptions(command)
 		.option("--uri <url>", "URI (repeatable)", collect, [])
 		.option("--field <kv>", "Custom field k=v (repeatable)", collect, [])
 		.option("--field-file <kv>", "Custom field value from file k=path (repeatable)", collect, [])
