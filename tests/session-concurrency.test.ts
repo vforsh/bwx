@@ -1,18 +1,13 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import {
-	chmodSync,
-	mkdtempSync,
-	mkdirSync,
-	readFileSync,
-	rmSync,
-	writeFileSync,
-} from "node:fs";
-import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
-
-const REPO_ROOT = resolve(import.meta.dir, "..");
-const CLI_PATH = join(REPO_ROOT, "bin/bwx");
-const dirs: string[] = [];
+	cleanupHarnesses,
+	createHarness,
+	loggedCalls,
+	readSession,
+	runCli,
+	type Harness,
+	type ProcessResult,
+} from "./helpers/cli-harness.ts";
 
 type FakeBwMode =
 	| "succeed"
@@ -22,163 +17,96 @@ type FakeBwMode =
 	| "crash-first"
 	| "barrier-reads";
 
-interface Harness {
-	configHome: string;
-	stateDir: string;
-	env: Record<string, string | undefined>;
-}
-
-interface ProcessResult {
-	exitCode: number;
-	stdout: string;
-	stderr: string;
-}
-
-afterEach(() => {
-	for (const dir of dirs.splice(0)) {
-		rmSync(dir, { recursive: true, force: true });
-	}
-});
+afterEach(cleanupHarnesses);
 
 describe("session establishment across CLI processes", () => {
 	test("does not serialize readers that already have a valid session", async () => {
-		const harness = createHarness("barrier-reads", "fresh-session");
+		const harness = harnessFor("barrier-reads", "fresh-session");
 
 		const results = await runReaders(harness, 4);
 
 		expectSuccessful(results, 4);
-		expect(unlockAttempts(harness)).toBe(0);
+		expect(loggedCalls(harness, "unlock.log")).toBe(0);
 	});
 
 	test("coalesces concurrent readers with no cached session", async () => {
-		const harness = createHarness("succeed");
+		const harness = harnessFor("succeed");
 
 		const results = await runReaders(harness, 4);
 
 		expectSuccessful(results, 4);
-		expect(unlockAttempts(harness)).toBe(1);
+		expect(loggedCalls(harness, "unlock.log")).toBe(1);
 		expect(readSession(harness)).toBe("fresh-session");
 	});
 
 	test("coalesces concurrent readers with a stale cached session", async () => {
-		const harness = createHarness("stagger-stale", "stale-session");
+		const harness = harnessFor("stagger-stale", "stale-session");
 
 		const results = await runReaders(harness, 4);
 
 		expectSuccessful(results, 4);
-		expect(unlockAttempts(harness)).toBe(1);
+		expect(loggedCalls(harness, "unlock.log")).toBe(1);
 		expect(readSession(harness)).toBe("fresh-session");
 	});
 
 	test("coalesces login and unlock for concurrent unauthenticated readers", async () => {
-		const harness = createHarness("login");
+		const harness = harnessFor("login");
 
 		const results = await runReaders(harness, 4);
 
 		expectSuccessful(results, 4);
-		expect(loginAttempts(harness)).toBe(1);
-		expect(unlockAttempts(harness)).toBe(1);
+		expect(loggedCalls(harness, "login.log")).toBe(1);
+		expect(loggedCalls(harness, "unlock.log")).toBe(1);
 		expect(readSession(harness)).toBe("fresh-session");
 	});
 
 	test("releases the lock when the establishing process fails", async () => {
-		const harness = createHarness("fail-first");
+		const harness = harnessFor("fail-first");
 
 		const results = await runReaders(harness, 4);
 
 		expect(results.filter((result) => result.exitCode === 0)).toHaveLength(3);
 		expect(results.filter((result) => result.exitCode !== 0)).toHaveLength(1);
-		expect(unlockAttempts(harness)).toBe(2);
+		expect(loggedCalls(harness, "unlock.log")).toBe(2);
 		expect(readSession(harness)).toBe("fresh-session");
 	});
 
 	test("recovers an abandoned lock after its owner is killed", async () => {
-		const harness = createHarness("crash-first");
+		const harness = harnessFor("crash-first");
 
 		const results = await runReaders(harness, 4);
 
 		expect(results.filter((result) => result.exitCode === 0)).toHaveLength(3);
 		expect(results.filter((result) => result.exitCode !== 0)).toHaveLength(1);
-		expect(unlockAttempts(harness)).toBe(2);
+		expect(loggedCalls(harness, "unlock.log")).toBe(2);
 		expect(readSession(harness)).toBe("fresh-session");
 	});
 });
 
-function createHarness(mode: FakeBwMode, initialSession?: string): Harness {
-	const root = mkdtempSync(`${tmpdir()}/bwx-session-race-`);
-	dirs.push(root);
-
-	const configHome = join(root, "config");
-	const configDir = join(configHome, "bwx");
-	const stateDir = join(root, "fake-bw-state");
-	const binDir = join(root, "bin");
-	mkdirSync(configDir, { recursive: true, mode: 0o700 });
-	mkdirSync(stateDir, { mode: 0o700 });
-	mkdirSync(binDir, { mode: 0o700 });
-
-	// Avoid an unrelated freshness poll in every process; the test starts at the
-	// authenticated read and session-recovery boundary it intends to exercise.
-	const now = new Date().toISOString();
-	writePrivate(join(configDir, "state.json"), {
-		lastSync: now,
-		checkedAt: now,
+function harnessFor(mode: FakeBwMode, session?: string): Harness {
+	return createHarness({
+		fakeBw: FAKE_BW,
+		session,
+		env: { FAKE_BW_MODE: mode },
 	});
-	writePrivate(join(configDir, "config.json"), {
-		email: "test@example.com",
-	});
-	if (initialSession) {
-		writePrivate(join(configDir, "session"), initialSession);
-	}
-
-	writeExecutable(join(binDir, "bw"), FAKE_BW);
-	writeExecutable(join(binDir, "security"), FAKE_SECURITY);
-
-	return {
-		configHome,
-		stateDir,
-		env: {
-			...process.env,
-			PATH: `${binDir}:${process.env.PATH ?? ""}`,
-			XDG_CONFIG_HOME: configHome,
-			FAKE_BW_STATE: stateDir,
-			FAKE_BW_MODE: mode,
-		},
-	};
 }
 
+/** Starts `count` readers at once; each blocks the others at a barrier in `bw`. */
 async function runReaders(
 	harness: Harness,
 	count: number,
 ): Promise<ProcessResult[]> {
-	const processes = Array.from({ length: count }, () =>
-		Bun.spawn(
-			[
-				process.execPath,
-				CLI_PATH,
-				"--quiet",
-				"--timeout",
-				"2s",
-				"get",
-				"password",
-				"Test",
-			],
-			{
-				env: { ...harness.env, FAKE_BW_READERS: String(count) },
-				stdout: "pipe",
-				stderr: "pipe",
-			},
-		),
-	);
-
 	return Promise.all(
-		processes.map(async (proc) => {
-			const [stdout, stderr, exitCode] = await Promise.all([
-				new Response(proc.stdout).text(),
-				new Response(proc.stderr).text(),
-				proc.exited,
-			]);
-			return { exitCode, stdout, stderr };
-		}),
+		Array.from({ length: count }, () =>
+			// A generous per-call budget: these readers contend with the rest of the
+			// suite for CPU, and a spawn that loses that race must not read as a
+			// vault timeout.
+			runCli(
+				harness,
+				["--quiet", "--timeout", "10s", "get", "password", "Test"],
+				{ FAKE_BW_READERS: String(count) },
+			),
+		),
 	);
 }
 
@@ -188,46 +116,6 @@ function expectSuccessful(results: ProcessResult[], count: number): void {
 		expect(result).toEqual({ exitCode: 0, stdout: "secret\n", stderr: "" });
 	}
 }
-
-function unlockAttempts(harness: Harness): number {
-	return attemptCount(harness, "unlock.log");
-}
-
-function loginAttempts(harness: Harness): number {
-	return attemptCount(harness, "login.log");
-}
-
-function attemptCount(harness: Harness, file: string): number {
-	try {
-		const contents = readFileSync(join(harness.stateDir, file), "utf8").trim();
-		return contents ? contents.split("\n").length : 0;
-	} catch {
-		return 0;
-	}
-}
-
-function readSession(harness: Harness): string {
-	return readFileSync(join(harness.configHome, "bwx/session"), "utf8");
-}
-
-function writePrivate(path: string, value: unknown): void {
-	mkdirSync(dirname(path), { recursive: true });
-	writeFileSync(
-		path,
-		typeof value === "string" ? value : JSON.stringify(value) + "\n",
-		{ mode: 0o600 },
-	);
-	chmodSync(path, 0o600);
-}
-
-function writeExecutable(path: string, contents: string): void {
-	writeFileSync(path, contents, { mode: 0o700 });
-	chmodSync(path, 0o700);
-}
-
-const FAKE_SECURITY = `#!/usr/bin/env bun
-process.stdout.write("master-password\\n");
-`;
 
 const FAKE_BW = `#!/usr/bin/env bun
 import {
@@ -320,7 +208,7 @@ function claim(name) {
 
 async function waitForFreshSession() {
   const path = join(process.env.XDG_CONFIG_HOME, "bwx/session");
-  const deadline = Date.now() + 5_000;
+  const deadline = Date.now() + 20_000;
   while (Date.now() < deadline) {
     try {
       if (readFileSync(path, "utf8").trim() === "fresh-session") return;
@@ -337,7 +225,7 @@ async function meetReaderBarrier(prefix) {
     mode: 0o600,
   });
   const expected = Number(process.env.FAKE_BW_READERS);
-  const deadline = Date.now() + 5_000;
+  const deadline = Date.now() + 20_000;
   while (readdirSync(stateDir).filter((name) => name.startsWith(prefix + "-")).length < expected) {
     if (Date.now() >= deadline) {
       process.stderr.write("reader barrier timed out\\n");
