@@ -1,7 +1,8 @@
 import type { Command } from "commander";
 import { getGlobalOpts } from "../program.ts";
 import { emitData, emitLog } from "../io.ts";
-import { readItemField, readTotp, readTotpSecret } from "../../bw/fields.ts";
+import { BUILTIN_FIELDS, readItemField, readTotp, readTotpSecret } from "../../bw/fields.ts";
+import { CARD_FIELDS } from "../../bw/cards.ts";
 import { CliError, ExitCode } from "../errors.ts";
 import type { GlobalOptions } from "../types.ts";
 
@@ -12,7 +13,10 @@ export function registerGet(program: Command): void {
 	program
 		.command("get")
 		.description("Get a field from a vault item (built-in or custom)")
-		.argument("<field>", "Field: password | username | totp | notes | uri | item | <custom>")
+		.argument(
+			"<field>",
+			`Field: ${BUILTIN_FIELDS.join(" | ")} | <custom>. Card items also take: ${CARD_FIELDS.join(" | ")}`,
+		)
 		.argument("<item>", "Item name or ID")
 		.option(
 			"--fresh [seconds]",

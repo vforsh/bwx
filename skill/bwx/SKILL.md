@@ -1,6 +1,6 @@
 ---
 name: bwx
-description: Bitwarden Extended CLI — retrieve, create, edit, delete vault items with auto-unlock. Use when the agent needs passwords, API keys, TOTP codes, custom fields, or vault management. Triggers on mentions of Bitwarden, bw, bwx, vault, password, secrets, TOTP, save key/token.
+description: Bitwarden Extended CLI — retrieve, create, edit, delete vault items with auto-unlock. Use when the agent needs passwords, API keys, TOTP codes, card details, custom fields, or vault management. Triggers on mentions of Bitwarden, bw, bwx, vault, password, secrets, TOTP, card number, CVV, save key/token.
 ---
 
 # bwx
@@ -17,6 +17,7 @@ bwx get username "GitHub"               # username
 bwx get notes "Deploy key"              # secure note content
 bwx get uri "GitHub"                    # first URI
 bwx get item "GitHub"                   # full item JSON
+bwx get number "Visa"                   # card number (also: cvv, expiry, cardholder, brand)
 bwx get "API Key" "Acme"                # custom field by name
 bwx field "API Key" "Acme"              # custom-field-only lookup, same arg order
 
@@ -45,6 +46,7 @@ echo "secret" | bwx create --name "Piped Note"
 ### `bwx get <field> <item>`
 
 Built-in fields: `password | username | totp | notes | uri | item`.
+Card items additionally take `number | cvv | cardholder | brand | expiry | expMonth | expYear`.
 Anything else is looked up as a custom field. Lists available fields on miss.
 
 A miss suggests near matches; an ambiguous name lists candidates with IDs. Read the
@@ -75,6 +77,27 @@ exactly are delegated to `bw get totp` instead of guessed at.
 
 Custom fields only, so an item whose custom field is named `password` is still reachable.
 Takes its arguments in the same order as `get` (this changed in 0.5.0).
+
+### Card fields
+
+```bash
+bwx get number "Visa"        # 4111111111111111
+bwx get cvv "Visa"           # 123        (bw's own key `code` works too)
+bwx get cardholder "Visa"    # Vladislav Forsh
+bwx get brand "Visa"         # Visa
+bwx get expiry "Visa"        # 03/2030    (composed; withheld if either half is missing)
+bwx get expMonth "Visa"      # 03         (zero-padded; bw stores "3")
+bwx get expYear "Visa"       # 2030
+```
+
+Read from the fetched item — `bw` has no card fields — so they cost one vault read and
+batch with each other under `bwx run`. Names match leniently on case, dashes, and
+underscores, and bw's JSON keys resolve (`code`, `cardholderName`, `exp-month`).
+
+A card field means the card object **only on a card item**. On any other type it resolves
+as a custom field of that name, since `number` and `code` are ordinary field names; the
+error names the item's actual type when no such field exists. `bwx field` never returns a
+card field.
 
 ### `bwx search <query>` / `bwx list [type]`
 
@@ -108,7 +131,7 @@ bwx run --env DB_PASS=password:'Prod DB' -- ./migrate.sh
 bwx run --env TOKEN='API Key:Acme' --env USER=username:Acme -- ./deploy.sh
 ```
 
-- `--env` is repeatable; the field resolves as in `bwx get` (built-in, else custom field).
+- `--env` is repeatable; the field resolves as in `bwx get` (built-in, else card, else custom field).
 - Only the first `:` splits field from item, so `password:http://my.router` works.
 - Put `--` before the command when it takes its own flags.
 - Child stdio is inherited; bwx exits with the child's status (`128 + signal` if killed).

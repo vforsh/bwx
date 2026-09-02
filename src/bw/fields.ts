@@ -1,6 +1,7 @@
 import pc from "picocolors";
 import { CliError, ExitCode } from "../cli/errors.ts";
 import type { GlobalOptions } from "../cli/types.ts";
+import { isCardField, readCardValue, CARD_FIELDS } from "./cards.ts";
 import { summarizeItem, type ItemSummary } from "./items.ts";
 import { runBwOrThrow } from "./runner.ts";
 import { withSession } from "./session.ts";
@@ -12,10 +13,10 @@ import {
 	TotpUnsupportedError,
 	type TotpCode,
 } from "./totp.ts";
-import { BwItemSchema, type BwItem } from "./types.ts";
+import { BW_TYPE_LABELS, BwItemSchema, BwItemType, type BwItem } from "./types.ts";
 
-/** Fields `bw get` resolves natively; anything else is a custom field name. */
-const BUILTIN_FIELDS = [
+/** Fields `bw get` resolves natively; anything else is a card or custom field. */
+export const BUILTIN_FIELDS = [
 	"password",
 	"username",
 	"totp",
@@ -69,6 +70,12 @@ export async function readItemField(
 		if (isTotpField(field, options)) {
 			const nextCode = resolveTotpSource(await fetchItem(item, opts), item, opts);
 			return (await nextCode()).code;
+		}
+
+		// `bw get` has no card fields, so they are read from the item itself —
+		// which also settles whether this item is a card at all.
+		if (isCardField(field) && !options?.customOnly) {
+			return extractField(await fetchItem(item, opts), field, options);
 		}
 
 		return isBuiltinField(field) && !options?.customOnly
@@ -266,7 +273,18 @@ function extractField(
 	field: string,
 	options?: ReadFieldOptions,
 ): string {
-	if (!isBuiltinField(field) || options?.customOnly) {
+	if (options?.customOnly) return pickCustomField(item, field);
+
+	// A card field only means the card object on a card item. On anything else
+	// `number` or `code` is just a custom field name, and stealing it here would
+	// break lookups that worked before cards were understood at all.
+	if (isCardField(field)) {
+		return item.type === BwItemType.Card
+			? extractCardField(item, field)
+			: pickCustomFieldWithCardHint(item, field);
+	}
+
+	if (!isBuiltinField(field)) {
 		return pickCustomField(item, field);
 	}
 
@@ -274,7 +292,7 @@ function extractField(
 
 	// Named exhaustively rather than defaulted: a chain ending in `password`
 	// would hand back the password for any field it failed to recognize.
-	let value: string | null;
+	let value: string | null | undefined;
 	switch (field) {
 		case "notes":
 			value = item.notes;
@@ -330,6 +348,45 @@ async function readCustomField(
 	opts: GlobalOptions,
 ): Promise<string> {
 	return pickCustomField(await fetchItem(item, opts), fieldName);
+}
+
+function extractCardField(item: BwItem, field: string): string {
+	const card = item.card;
+	if (!card) {
+		throw new FieldMissingError(
+			`Item "${item.name}" is a card but carries no card data`,
+			ExitCode.NotFound,
+		);
+	}
+
+	const value = readCardValue(card, field);
+	if (!value) {
+		throw new FieldMissingError(
+			`No ${field} found for item: ${item.name}`,
+			ExitCode.NotFound,
+		);
+	}
+
+	return value;
+}
+
+/**
+ * `number`, `code`, and `brand` are plausible custom field names, so a card
+ * field asked of a non-card item is resolved as one. Saying which kind of item
+ * it actually is turns "field not found" into the answer rather than a riddle.
+ */
+function pickCustomFieldWithCardHint(item: BwItem, field: string): string {
+	try {
+		return pickCustomField(item, field);
+	} catch (err) {
+		if (!(err instanceof FieldMissingError)) throw err;
+
+		const type = BW_TYPE_LABELS[item.type] ?? `type:${item.type}`;
+		throw new FieldMissingError(
+			`${err.message}\n\nNote: "${field}" reads a card field on card items, but "${item.name}" is a ${type} item. Card fields: ${CARD_FIELDS.join(", ")}.`,
+			err.exitCode,
+		);
+	}
 }
 
 function pickCustomField(item: BwItem, fieldName: string): string {

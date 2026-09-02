@@ -70,7 +70,8 @@ export function parseEnvSpecs(raws: string[]): EnvSpec[] {
 /**
  * Splits `NAME=<field>:<item>` on the first `=` and then the first `:`, so item
  * names may contain colons (`password:http://my.router`) while field names may not.
- * Fields resolve exactly as in `bwx get`: built-ins first, otherwise custom fields.
+ * Fields resolve exactly as in `bwx get`: built-ins first, then card fields on a card
+ * item, otherwise custom fields.
  */
 export function parseEnvSpec(raw: string): EnvSpec {
 	const eq = raw.indexOf("=");

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { summarizeItem } from "../src/bw/items.ts";
+import { BwItemSchema } from "../src/bw/types.ts";
 import { DEFAULT_LIMIT, filterItems, parseLimit } from "../src/cli/items.ts";
 import { CliError } from "../src/cli/errors.ts";
 
@@ -100,5 +101,63 @@ describe("parseLimit", () => {
 		for (const raw of ["abc", "-1", "1.5", "", "10x"]) {
 			expect(() => parseLimit(raw)).toThrow(CliError);
 		}
+	});
+});
+
+describe("BwItemSchema", () => {
+	/**
+	 * The shape `bw get item` actually returns for an unfiled personal card: keys
+	 * it has no value for are absent, not null. Requiring them once broke reads of
+	 * the fields that *were* present.
+	 */
+	const SPARSE_CARD = {
+		object: "item",
+		id: "id-3",
+		type: 3,
+		name: "Test Card",
+		notes: null,
+		favorite: false,
+		card: {
+			brand: "Visa",
+			number: "4111111111111111",
+			expMonth: "12",
+			expYear: "2040",
+			code: "123",
+		},
+	};
+
+	test("parses an item whose unset keys are omitted rather than nulled", () => {
+		const parsed = BwItemSchema.parse(SPARSE_CARD);
+		expect(parsed.card?.brand).toBe("Visa");
+		expect(parsed.folderId).toBeUndefined();
+	});
+
+	test("keeps unrecognized card keys, so `get item` does not lose data", () => {
+		const parsed = BwItemSchema.parse({
+			...SPARSE_CARD,
+			card: { ...SPARSE_CARD.card, someFutureKey: "kept" },
+		});
+		expect(parsed.card).toMatchObject({ someFutureKey: "kept" });
+	});
+
+	test("parses a login whose absent keys bw simply left out", () => {
+		const parsed = BwItemSchema.parse({
+			object: "item",
+			id: "id-4",
+			type: 1,
+			name: "account.example.com",
+			// No `totp` and no `uris`: bw omits both on a login without them.
+			login: { username: "user", password: "secret" },
+		});
+		expect(parsed.login?.username).toBe("user");
+		expect(parsed.login?.totp).toBeUndefined();
+	});
+
+	test("accepts a numeric expiry, which imported items carry", () => {
+		const parsed = BwItemSchema.parse({
+			...SPARSE_CARD,
+			card: { ...SPARSE_CARD.card, expMonth: 12, expYear: 2040 },
+		});
+		expect(parsed.card?.expMonth).toBe(12);
 	});
 });

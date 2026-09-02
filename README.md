@@ -71,6 +71,7 @@ unlock. `valid` means reads work now, `stale` means the cached session was rejec
 |---------|-------------|
 | `bwx get <field> <item>` | Get field (`password`, `username`, `totp`, `notes`, `uri`, `item`) |
 | `bwx get totp <item>` | TOTP code (`--fresh [n]`, `--seed`) |
+| `bwx get <card field> <item>` | Card field (`number`, `cvv`, `cardholder`, `brand`, `expiry`, …) |
 | `bwx field <name> <item>` | Get custom field by name (same argument order as `get`) |
 | `bwx search <query>` | Search items (`--type`, `--folder`, `--limit`, `--full-items`) |
 | `bwx list [type]` | List items (`--type`, `--folder`, `--limit`, `--full-items`) |
@@ -138,6 +139,45 @@ bwx edit "AWS" --rm-totp
 Spaces, hyphens, and `=` padding are stripped and case is normalized; an `otpauth://` URI
 is stored verbatim so its parameters survive. Malformed secrets are rejected before the
 write, because a bad seed is otherwise discovered at the login it was supposed to unlock.
+
+### Cards
+
+Card items keep their values in a `card` object that `bw get <field>` cannot reach, so
+bwx reads them from the item itself — one vault read, no extra `bw` spawn:
+
+```bash
+bwx get number "Visa"        # 4111111111111111
+bwx get cvv "Visa"           # 123
+bwx get cardholder "Visa"    # Vladislav Forsh
+bwx get brand "Visa"         # Visa
+bwx get expiry "Visa"        # 03/2030
+bwx get expMonth "Visa"      # 03
+bwx get expYear "Visa"       # 2030
+```
+
+Names match leniently on case, dashes, and underscores, and bw's own JSON keys work too,
+so a name copied out of `bwx get item` resolves (`code` → `cvv`, `cardholderName` →
+`cardholder`, `exp-month` → `expMonth`).
+
+Two values are normalized rather than passed through, because the stored form is not the
+usable one:
+
+- `expMonth` is zero-padded — bw stores the month as typed (`3`), and every `MM` field
+  wants `03`.
+- `expiry` is composed from month and year, and is withheld entirely if either is missing
+  rather than handing back half a date.
+
+A card field only means the card object **on a card item**. `number`, `code`, and `brand`
+are plausible custom field names, so on any other item type they resolve as custom fields
+exactly as before — and if no such custom field exists, the error says which kind of item
+it actually is. `bwx field` is unchanged: custom fields only, never a card field.
+
+Grouping several card fields into one read is worth it — see [Secrets into a child
+process](#secrets-into-a-child-process):
+
+```bash
+bwx run --env NUM=number:Visa --env CVV=cvv:Visa --env EXP=expiry:Visa -- ./pay.sh
+```
 
 ### Listings are capped
 

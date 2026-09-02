@@ -73,17 +73,38 @@ export interface BwLogin {
 	uris: BwUri[] | null;
 }
 
+// --- Card ---
+
+/**
+ * Values arrive as strings from `bw`, but `expMonth`/`expYear` are numbers in
+ * some hand-written and imported items, so both are accepted rather than
+ * failing the whole item parse over a field the caller may not even want. Every
+ * key is optional for the same reason — see the schema below.
+ */
+export interface BwCard {
+	cardholderName?: string | null;
+	brand?: string | null;
+	number?: string | null;
+	expMonth?: string | number | null;
+	expYear?: string | number | null;
+	code?: string | null;
+}
+
 // --- Item (loose schema — passthrough for edit round-trip) ---
 
 export const BwItemSchema = z
 	.object({
 		id: z.string(),
-		organizationId: z.string().nullable(),
-		folderId: z.string().nullable(),
+		// `bw get item` omits unset keys rather than nulling them — a card with no
+		// folder has no `folderId` at all — so everything but the identity of the
+		// item is optional. Requiring them made an absent key fail the parse and
+		// took down reads of fields that were present.
+		organizationId: z.string().nullable().optional(),
+		folderId: z.string().nullable().optional(),
 		type: z.number(),
 		name: z.string(),
-		notes: z.string().nullable(),
-		favorite: z.boolean(),
+		notes: z.string().nullable().optional(),
+		favorite: z.boolean().optional(),
 		fields: z
 			.array(
 				z.object({
@@ -92,12 +113,13 @@ export const BwItemSchema = z
 					type: z.number(),
 				}),
 			)
-			.nullable(),
+			.nullable()
+			.optional(),
 		login: z
 			.object({
-				username: z.string().nullable(),
-				password: z.string().nullable(),
-				totp: z.string().nullable(),
+				username: z.string().nullable().optional(),
+				password: z.string().nullable().optional(),
+				totp: z.string().nullable().optional(),
 				uris: z
 					.array(
 						z.object({
@@ -105,8 +127,25 @@ export const BwItemSchema = z
 							uri: z.string(),
 						}),
 					)
-					.nullable(),
+					.nullable()
+					.optional(),
 			})
+			.passthrough()
+			.nullable()
+			.optional(),
+		// Every key optional and passthrough on top: a card bwx cannot fully
+		// describe must still parse, or an unrelated `get password` would fail
+		// on a vault that merely contains one.
+		card: z
+			.object({
+				cardholderName: z.string().nullable().optional(),
+				brand: z.string().nullable().optional(),
+				number: z.string().nullable().optional(),
+				expMonth: z.union([z.string(), z.number()]).nullable().optional(),
+				expYear: z.union([z.string(), z.number()]).nullable().optional(),
+				code: z.string().nullable().optional(),
+			})
+			.passthrough()
 			.nullable()
 			.optional(),
 		reprompt: z.number().optional(),
