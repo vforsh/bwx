@@ -118,6 +118,25 @@ describe("get totp", () => {
 	});
 });
 
+describe("custom fields", () => {
+	/**
+	 * Every path through the item JSON — `field`, `get <custom>`, `get totp` —
+	 * was dead while the schema required keys bw omits, because the parse failed
+	 * before any field was looked at. The fake bw above now returns that shape.
+	 */
+	test("reads a field off an item whose unset keys bw left out", async () => {
+		const harness = warmHarness(null);
+
+		const viaField = await runCli(harness, ["field", "k", "Test"]);
+		expect(viaField.exitCode).toBe(0);
+		expect(viaField.stdout).toBe("v\n");
+
+		const viaGet = await runCli(harness, ["get", "k", "Test"]);
+		expect(viaGet.exitCode).toBe(0);
+		expect(viaGet.stdout).toBe("v\n");
+	});
+});
+
 describe("stale session recovery", () => {
 	test("revalidates the rejected token only once", async () => {
 		const harness = createHarness({ fakeBw: FAKE_BW, session: "stale-session" });
@@ -181,21 +200,28 @@ if (command === "get") {
   }
 
   if (target === "item") {
+    const login = {
+      username: "user@example.com",
+      password: "secret",
+      passwordRevisionDate: null,
+      uris: [],
+      fido2Credentials: [],
+    };
+    // bw leaves \`totp\` out entirely on a login without one rather than nulling it.
+    if (process.env.FAKE_BW_TOTP) login.totp = process.env.FAKE_BW_TOTP;
+
+    // The shape \`bw get item\` really returns: \`organizationId\`, \`folderId\` and
+    // \`notes\` are absent on an unfiled note-less item, not null. Fixtures that
+    // spelled them out as null are why a schema requiring them looked fine here.
     process.stdout.write(JSON.stringify({
+      object: "item",
       id: "11111111-2222-3333-4444-555555555555",
-      organizationId: null,
-      folderId: null,
       type: 1,
       name: "Test",
-      notes: null,
       favorite: false,
-      fields: null,
-      login: {
-        username: "user@example.com",
-        password: "secret",
-        totp: process.env.FAKE_BW_TOTP ?? null,
-        uris: null,
-      },
+      reprompt: 0,
+      fields: [{ name: "k", value: "v", type: 0 }],
+      login,
     }) + "\\n");
     process.exit(0);
   }
