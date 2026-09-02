@@ -30,6 +30,11 @@ export const BW_TYPE_LABELS: Record<number, string> = {
 	4: "identity",
 };
 
+/** The label for an item type, naming the raw number for one bwx predates. */
+export function itemTypeLabel(type: number): string {
+	return BW_TYPE_LABELS[type] ?? `type:${type}`;
+}
+
 export const BW_TYPE_FROM_NAME: Record<string, BwItemType> = {
 	login: BwItemType.Login,
 	logins: BwItemType.Login,
@@ -92,18 +97,23 @@ export interface BwCard {
 
 // --- Item (loose schema — passthrough for edit round-trip) ---
 
+/**
+ * `bw get item` omits keys it has no value for rather than nulling them — an
+ * unfiled card has no `folderId`, a login without 2FA no `totp` — so every key
+ * but an item's identity is optional as well as nullable. Requiring them made
+ * an absent key fail the parse and took down reads of the fields that were
+ * present.
+ */
+const OmittableTextSchema = z.string().nullable().optional();
+
 export const BwItemSchema = z
 	.object({
 		id: z.string(),
-		// `bw get item` omits unset keys rather than nulling them — a card with no
-		// folder has no `folderId` at all — so everything but the identity of the
-		// item is optional. Requiring them made an absent key fail the parse and
-		// took down reads of fields that were present.
-		organizationId: z.string().nullable().optional(),
-		folderId: z.string().nullable().optional(),
+		organizationId: OmittableTextSchema,
+		folderId: OmittableTextSchema,
 		type: z.number(),
 		name: z.string(),
-		notes: z.string().nullable().optional(),
+		notes: OmittableTextSchema,
 		favorite: z.boolean().optional(),
 		fields: z
 			.array(
@@ -117,9 +127,9 @@ export const BwItemSchema = z
 			.optional(),
 		login: z
 			.object({
-				username: z.string().nullable().optional(),
-				password: z.string().nullable().optional(),
-				totp: z.string().nullable().optional(),
+				username: OmittableTextSchema,
+				password: OmittableTextSchema,
+				totp: OmittableTextSchema,
 				uris: z
 					.array(
 						z.object({
@@ -133,17 +143,15 @@ export const BwItemSchema = z
 			.passthrough()
 			.nullable()
 			.optional(),
-		// Every key optional and passthrough on top: a card bwx cannot fully
-		// describe must still parse, or an unrelated `get password` would fail
-		// on a vault that merely contains one.
 		card: z
 			.object({
-				cardholderName: z.string().nullable().optional(),
-				brand: z.string().nullable().optional(),
-				number: z.string().nullable().optional(),
+				cardholderName: OmittableTextSchema,
+				brand: OmittableTextSchema,
+				number: OmittableTextSchema,
+				// Numeric in items written by hand or by an importer.
 				expMonth: z.union([z.string(), z.number()]).nullable().optional(),
 				expYear: z.union([z.string(), z.number()]).nullable().optional(),
-				code: z.string().nullable().optional(),
+				code: OmittableTextSchema,
 			})
 			.passthrough()
 			.nullable()

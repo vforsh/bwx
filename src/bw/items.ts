@@ -1,4 +1,4 @@
-import { BW_TYPE_LABELS } from "./types.ts";
+import { itemTypeLabel } from "./types.ts";
 
 /**
  * The only shape of a vault item bwx prints when the caller did not ask for a
@@ -25,7 +25,7 @@ export function summarizeItem(item: Record<string, unknown>): ItemSummary {
 
 	return {
 		id: String(item.id ?? ""),
-		type: BW_TYPE_LABELS[item.type as number] ?? `type:${item.type}`,
+		type: itemTypeLabel(item.type as number),
 		name: String(item.name ?? ""),
 		username: typeof username === "string" && username ? username : null,
 		hasTotp: typeof totp === "string" && totp.length > 0,
