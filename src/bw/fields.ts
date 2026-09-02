@@ -13,7 +13,7 @@ import {
 	TotpUnsupportedError,
 	type TotpCode,
 } from "./totp.ts";
-import { BW_TYPE_LABELS, BwItemSchema, BwItemType, type BwItem } from "./types.ts";
+import { BwItemSchema, BwItemType, itemTypeLabel, type BwItem } from "./types.ts";
 
 /** Fields `bw get` resolves natively; anything else is a card or custom field. */
 export const BUILTIN_FIELDS = [
@@ -72,13 +72,15 @@ export async function readItemField(
 			return (await nextCode()).code;
 		}
 
+		if (options?.customOnly) return readCustomField(field, item, opts);
+
 		// `bw get` has no card fields, so they are read from the item itself —
 		// which also settles whether this item is a card at all.
-		if (isCardField(field) && !options?.customOnly) {
+		if (isCardField(field)) {
 			return extractField(await fetchItem(item, opts), field, options);
 		}
 
-		return isBuiltinField(field) && !options?.customOnly
+		return isBuiltinField(field)
 			? readBuiltinField(field, item, opts)
 			: readCustomField(field, item, opts);
 	});
@@ -277,11 +279,12 @@ function extractField(
 
 	// A card field only means the card object on a card item. On anything else
 	// `number` or `code` is just a custom field name, and stealing it here would
-	// break lookups that worked before cards were understood at all.
+	// break lookups that worked before cards were understood at all — so the
+	// name is resolved as one, and the miss says what the item actually is.
 	if (isCardField(field)) {
 		return item.type === BwItemType.Card
 			? extractCardField(item, field)
-			: pickCustomFieldWithCardHint(item, field);
+			: pickCustomField(item, field, cardFieldHint(item, field));
 	}
 
 	if (!isBuiltinField(field)) {
@@ -351,15 +354,7 @@ async function readCustomField(
 }
 
 function extractCardField(item: BwItem, field: string): string {
-	const card = item.card;
-	if (!card) {
-		throw new FieldMissingError(
-			`Item "${item.name}" is a card but carries no card data`,
-			ExitCode.NotFound,
-		);
-	}
-
-	const value = readCardValue(card, field);
+	const value = item.card ? readCardValue(item.card, field) : null;
 	if (!value) {
 		throw new FieldMissingError(
 			`No ${field} found for item: ${item.name}`,
@@ -370,35 +365,23 @@ function extractCardField(item: BwItem, field: string): string {
 	return value;
 }
 
-/**
- * `number`, `code`, and `brand` are plausible custom field names, so a card
- * field asked of a non-card item is resolved as one. Saying which kind of item
- * it actually is turns "field not found" into the answer rather than a riddle.
- */
-function pickCustomFieldWithCardHint(item: BwItem, field: string): string {
-	try {
-		return pickCustomField(item, field);
-	} catch (err) {
-		if (!(err instanceof FieldMissingError)) throw err;
-
-		const type = BW_TYPE_LABELS[item.type] ?? `type:${item.type}`;
-		throw new FieldMissingError(
-			`${err.message}\n\nNote: "${field}" reads a card field on card items, but "${item.name}" is a ${type} item. Card fields: ${CARD_FIELDS.join(", ")}.`,
-			err.exitCode,
-		);
-	}
+/** Why a card field found nothing on an item that is not a card. */
+function cardFieldHint(item: BwItem, field: string): string {
+	return `Note: "${field}" reads a card field on card items, but "${item.name}" is a ${itemTypeLabel(item.type)} item. Card fields: ${CARD_FIELDS.join(", ")}.`;
 }
 
-function pickCustomField(item: BwItem, fieldName: string): string {
+/** `hint` is appended to a miss, for a name that could have meant something else. */
+function pickCustomField(item: BwItem, fieldName: string, hint?: string): string {
 	const fields = item.fields ?? [];
 	const match = fields.find((f) => f.name === fieldName);
 
 	if (!match) {
 		const available = fields.map((f) => f.name).join(", ");
+		const miss = available
+			? `Field "${fieldName}" not found. Available: ${available}`
+			: `Field "${fieldName}" not found (item has no custom fields)`;
 		throw new FieldMissingError(
-			available
-				? `Field "${fieldName}" not found. Available: ${available}`
-				: `Field "${fieldName}" not found (item has no custom fields)`,
+			hint ? `${miss}\n\n${hint}` : miss,
 			ExitCode.NotFound,
 		);
 	}
