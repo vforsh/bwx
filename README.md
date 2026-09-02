@@ -383,3 +383,7 @@ Breaking changes, all of them cases where the old behavior failed quietly:
 ## Stack
 
 Bun, TypeScript, Commander, Zod, picocolors.
+
+## License
+
+MIT — see [LICENSE](LICENSE).

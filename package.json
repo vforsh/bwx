@@ -1,15 +1,34 @@
 {
   "name": "bwx",
   "version": "0.8.0",
-  "type": "module",
+  "description": "Extended Bitwarden CLI for scripts and agents — auto-unlock via macOS Keychain, session caching, local TOTP, structured output",
   "keywords": [
     "bitwarden",
+    "bitwarden-cli",
     "cli",
     "vault",
     "secrets",
+    "secrets-management",
+    "totp",
+    "keychain",
+    "macos",
     "ai-agents",
     "bun"
   ],
+  "license": "MIT",
+  "author": "Vladislav Forsh <vforsh@gmail.com>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/vforsh/bwx.git"
+  },
+  "homepage": "https://github.com/vforsh/bwx#readme",
+  "bugs": {
+    "url": "https://github.com/vforsh/bwx/issues"
+  },
+  "type": "module",
+  "engines": {
+    "bun": ">=1.0.0"
+  },
   "files": [
     "bin",
     "src",
