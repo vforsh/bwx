@@ -1,36 +1,14 @@
 import type { BwCard } from "./types.ts";
 
 /**
- * Card items keep their secrets in a `card` object rather than in `login` or in
+ * Card items keep their values in a `card` object rather than in `login` or in
  * custom fields, and `bw get <field>` has no equivalent for any of them — so
  * these names are resolved here, from an item bwx has already fetched.
  *
- * The value is returned or `null`; naming the item and raising is the caller's
- * job, since it holds the item name and the error type.
+ * A reader returns the value or `null`; naming the item and raising is the
+ * caller's job, since it holds the item name and the error type.
  */
 type CardReader = (card: BwCard) => string | null;
-
-/**
- * Every accepted spelling, normalized (see {@link normalizeCardField}). bw's own
- * JSON keys are in here alongside the words people actually say, so a name
- * copied out of `bwx get item` works and so does the one you'd guess.
- */
-const CARD_READERS: Record<string, CardReader> = {
-	number: (card) => text(card.number),
-	cvv: (card) => text(card.code),
-	cvc: (card) => text(card.code),
-	code: (card) => text(card.code),
-	securitycode: (card) => text(card.code),
-	cardholder: (card) => text(card.cardholderName),
-	cardholdername: (card) => text(card.cardholderName),
-	holder: (card) => text(card.cardholderName),
-	brand: (card) => text(card.brand),
-	expmonth: readExpMonth,
-	expyear: (card) => text(card.expYear),
-	expiry: readExpiry,
-	exp: readExpiry,
-	expiration: readExpiry,
-};
 
 /** Canonical names, in the order help text and errors list them. */
 export const CARD_FIELDS = [
@@ -43,26 +21,66 @@ export const CARD_FIELDS = [
 	"expYear",
 ] as const;
 
+export type CardField = (typeof CARD_FIELDS)[number];
+
+/**
+ * How each canonical field reads off the card object. Keyed by `CardField`, so
+ * adding a name to {@link CARD_FIELDS} without a reader fails to compile rather
+ * than at the one call that asks for it.
+ */
+const CARD_READERS: Record<CardField, CardReader> = {
+	number: (card) => text(card.number),
+	cvv: (card) => text(card.code),
+	cardholder: (card) => text(card.cardholderName),
+	brand: (card) => text(card.brand),
+	expiry: readExpiry,
+	expMonth: readExpMonth,
+	expYear: (card) => text(card.expYear),
+};
+
+/**
+ * Other spellings of the same fields: bw's own JSON keys, so a name copied out
+ * of `bwx get item` resolves, plus the words people reach for first.
+ */
+const CARD_ALIASES: Record<string, CardField> = {
+	code: "cvv",
+	cvc: "cvv",
+	securityCode: "cvv",
+	cardholderName: "cardholder",
+	holder: "cardholder",
+	exp: "expiry",
+	expiration: "expiry",
+};
+
 /**
  * Card names are matched leniently — case, dashes, and underscores all collapse
  * — because `expMonth`, `exp-month`, and `expmonth` are the same request, and
  * failing one of them would only teach the caller to try the other two.
  */
-function normalizeCardField(field: string): string {
+function normalize(field: string): string {
 	return field.toLowerCase().replaceAll(/[-_\s]/g, "");
 }
 
+/**
+ * Every accepted spelling to its canonical field, derived so that the two
+ * tables above stay the only place a card field name is written down.
+ */
+const CANONICAL_BY_SPELLING: Record<string, CardField> = {
+	...Object.fromEntries(CARD_FIELDS.map((field) => [normalize(field), field])),
+	...Object.fromEntries(
+		Object.entries(CARD_ALIASES).map(([alias, field]) => [normalize(alias), field]),
+	),
+};
+
 /** True when `field` names a card field rather than a login field or a custom one. */
 export function isCardField(field: string): boolean {
-	return normalizeCardField(field) in CARD_READERS;
+	return normalize(field) in CANONICAL_BY_SPELLING;
 }
 
-/**
- * Reads one card field, or `null` when the card carries no value for it. Call
- * only for a `field` {@link isCardField} accepts.
- */
+/** Reads one card field, or `null` when the card carries no value for it. */
 export function readCardValue(card: BwCard, field: string): string | null {
-	return CARD_READERS[normalizeCardField(field)]?.(card) ?? null;
+	const canonical = CANONICAL_BY_SPELLING[normalize(field)];
+	return canonical ? CARD_READERS[canonical](card) : null;
 }
 
 /**
@@ -71,9 +89,7 @@ export function readCardValue(card: BwCard, field: string): string | null {
  * the two-digit form rather than each one remembering to pad.
  */
 function readExpMonth(card: BwCard): string | null {
-	const month = text(card.expMonth);
-	if (!month) return null;
-	return /^\d$/.test(month) ? `0${month}` : month;
+	return text(card.expMonth)?.padStart(2, "0") ?? null;
 }
 
 /**
