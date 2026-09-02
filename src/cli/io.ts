@@ -34,6 +34,16 @@ export function emitData(
 	}
 }
 
+/**
+ * Writes a value and nothing else — no newline, no formatting. {@link emitData}'s
+ * newline is a courtesy to terminals, but a consumer that reads stdin literally
+ * takes it as the last byte of the secret. Newlines *inside* the value are the
+ * value's own and are left alone.
+ */
+export function emitRaw(value: string): void {
+	process.stdout.write(value);
+}
+
 export function emitLog(message: string, opts: GlobalOptions): void {
 	if (opts.quiet || opts.json) return;
 	process.stderr.write(message + "\n");

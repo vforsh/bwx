@@ -69,10 +69,10 @@ unlock. `valid` means reads work now, `stale` means the cached session was rejec
 
 | Command | Description |
 |---------|-------------|
-| `bwx get <field> <item>` | Get field (`password`, `username`, `totp`, `notes`, `uri`, `item`) |
+| `bwx get <field> <item>` | Get field (`password`, `username`, `totp`, `notes`, `uri`, `item`), `--raw` |
 | `bwx get totp <item>` | TOTP code (`--fresh [n]`, `--seed`) |
 | `bwx get <card field> <item>` | Card field (`number`, `cvv`, `cardholder`, `brand`, `expiry`, …) |
-| `bwx field <name> <item>` | Get custom field by name (same argument order as `get`) |
+| `bwx field <name> <item>` | Get custom field by name (same argument order as `get`), `--raw` |
 | `bwx search <query>` | Search items (`--type`, `--folder`, `--limit`, `--full-items`) |
 | `bwx list [type]` | List items (`--type`, `--folder`, `--limit`, `--full-items`) |
 | `bwx folders` | List folder names and IDs |
@@ -102,6 +102,29 @@ error: No item matching "GitHub PAT vforsh old". Did you mean:
 
   934c1f57-…  note  GitHub PAT (vforsh)
   3683fb9a-…  note  GitHub PAT (yaforsh) [codex-monitor-pr]
+```
+
+### Piping a secret
+
+`get` and `field` end their output with a newline, which reads fine in a terminal and
+lands *inside the secret* for a consumer that treats stdin literally. `--raw` suppresses
+that one newline — and only that one: newlines stored in the value are its own and are
+written through.
+
+```bash
+bwx get password "GitHub" --raw | argus fill app --selector 'input[type=password]' --value-stdin
+```
+
+`--raw` values are byte-for-byte, so whitespace around a password survives too (the
+default output trims it). `--raw` and `--json` are mutually exclusive — the JSON envelope
+quotes and wraps the value, so there is no raw byte stream to hand over — and combining
+them is a usage error rather than a silent winner.
+
+For handing a secret to a whole command rather than to one stdin, `bwx run` keeps it out
+of argv entirely:
+
+```bash
+bwx run --env GITHUB_TOKEN=password:"GitHub PAT" -- gh api /user
 ```
 
 ### TOTP

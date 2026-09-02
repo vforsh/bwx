@@ -40,6 +40,14 @@ export interface ReadFieldOptions {
 	 * field is called e.g. `password` is still reachable.
 	 */
 	customOnly?: boolean;
+	/**
+	 * Return the value exactly as stored rather than trimmed. Only `bwx get --raw`
+	 * asks for this; every other caller compares or parses the value, where
+	 * surrounding whitespace is framing rather than content. Custom and card
+	 * fields are read out of the item JSON and are verbatim either way — this
+	 * reaches the fields `bw get <field>` prints on stdout.
+	 */
+	verbatim?: boolean;
 }
 
 /**
@@ -81,7 +89,7 @@ export async function readItemField(
 		}
 
 		return isBuiltinField(field)
-			? readBuiltinField(field, item, opts)
+			? readBuiltinField(field, item, opts, options?.verbatim)
 			: readCustomField(field, item, opts);
 	});
 }
@@ -330,9 +338,10 @@ async function readBuiltinField(
 	field: string,
 	item: string,
 	opts: GlobalOptions,
+	verbatim = false,
 ): Promise<string> {
 	const result = await withSession(opts, () =>
-		runBwOrThrow(["get", field, item]),
+		runBwOrThrow(["get", field, item], { verbatim }),
 	);
 
 	if (!result) {

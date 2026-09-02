@@ -1,6 +1,6 @@
 import type { Command } from "commander";
 import { getGlobalOpts } from "../program.ts";
-import { emitData, emitLog } from "../io.ts";
+import { emitData, emitLog, emitRaw } from "../io.ts";
 import { BUILTIN_FIELDS, readItemField, readTotp, readTotpSecret } from "../../bw/fields.ts";
 import { CARD_FIELDS } from "../../bw/cards.ts";
 import { CliError, ExitCode } from "../errors.ts";
@@ -8,6 +8,16 @@ import type { GlobalOptions } from "../types.ts";
 
 /** Seconds left below which `--fresh` waits, when the flag is given bare. */
 const DEFAULT_FRESH_SECONDS = 5;
+
+/** Written once so `get` and `field` describe `--raw` in the same words. */
+const RAW_DESCRIPTION =
+	"Suppress only the trailing newline bwx adds; newlines stored in the value are kept";
+
+interface GetOptions {
+	fresh?: string | boolean;
+	seed?: boolean;
+	raw?: boolean;
+}
 
 export function registerGet(program: Command): void {
 	program
@@ -23,13 +33,15 @@ export function registerGet(program: Command): void {
 			`Wait for the next TOTP window if fewer than N seconds remain (default ${DEFAULT_FRESH_SECONDS})`,
 		)
 		.option("--seed", "Emit the stored TOTP secret instead of a code")
+		.option("--raw", RAW_DESCRIPTION)
 		.action(async function (
 			this: Command,
 			field: string,
 			item: string,
-			localOpts: { fresh?: string | boolean; seed?: boolean },
+			localOpts: GetOptions,
 		) {
 			const opts = getGlobalOpts(this);
+			assertRawUsable(localOpts, opts);
 
 			if (field === "totp") {
 				await emitTotp(item, localOpts, opts);
@@ -38,9 +50,18 @@ export function registerGet(program: Command): void {
 
 			assertTotpOnlyFlags(field, localOpts);
 
-			const value = await readItemField(field, item, opts);
-			// `item` is the one field that is itself JSON — emit it as structure.
-			emitData(field === "item" ? JSON.parse(value) : value, opts);
+			const value = await readItemField(field, item, opts, {
+				verbatim: localOpts.raw,
+			});
+
+			// `item` is the one field that is itself JSON, so it is emitted as
+			// structure — except under `--raw`, which promised the bytes `bw` gave us.
+			if (field === "item" && !localOpts.raw) {
+				emitData(JSON.parse(value), opts);
+				return;
+			}
+
+			emitValue(value, localOpts, opts);
 		});
 
 	program
@@ -50,17 +71,55 @@ export function registerGet(program: Command): void {
 		// alongside it — the two used to take their arguments back to front.
 		.argument("<name>", "Custom field name")
 		.argument("<item>", "Item name or ID")
-		.action(async function (this: Command, name: string, item: string) {
+		.option("--raw", RAW_DESCRIPTION)
+		.action(async function (
+			this: Command,
+			name: string,
+			item: string,
+			localOpts: { raw?: boolean },
+		) {
 			const opts = getGlobalOpts(this);
+			assertRawUsable(localOpts, opts);
+
 			try {
-				emitData(
-					await readItemField(name, item, opts, { customOnly: true }),
-					opts,
-				);
+				const value = await readItemField(name, item, opts, { customOnly: true });
+				emitValue(value, localOpts, opts);
 			} catch (err) {
 				throw withOrderHint(err);
 			}
 		});
+}
+
+/**
+ * Emits one field value. `--raw` writes it alone, so piping a secret into a
+ * consumer that reads stdin literally does not append bwx's newline to it;
+ * `meta` describes the JSON envelope and so never applies on that path.
+ */
+function emitValue(
+	value: string,
+	localOpts: { raw?: boolean },
+	opts: GlobalOptions,
+	meta?: Record<string, unknown>,
+): void {
+	if (localOpts.raw) {
+		emitRaw(value);
+		return;
+	}
+	emitData(value, opts, meta);
+}
+
+/**
+ * `--json` is an envelope — the value arrives quoted, escaped, and wrapped in
+ * `{ "data": … }` — so its trailing newline is the least of what `--raw` would
+ * have to undo. Saying so beats silently letting one win.
+ */
+function assertRawUsable(localOpts: { raw?: boolean }, opts: GlobalOptions): void {
+	if (localOpts.raw && opts.json) {
+		throw new CliError(
+			"--raw and --json cannot be combined: --json wraps the value in an envelope. Use one or the other.",
+			ExitCode.BadArgs,
+		);
+	}
 }
 
 /**
@@ -70,7 +129,7 @@ export function registerGet(program: Command): void {
  */
 async function emitTotp(
 	item: string,
-	localOpts: { fresh?: string | boolean; seed?: boolean },
+	localOpts: GetOptions,
 	opts: GlobalOptions,
 ): Promise<void> {
 	if (localOpts.seed) {
@@ -80,7 +139,7 @@ async function emitTotp(
 				ExitCode.BadArgs,
 			);
 		}
-		emitData(await readTotpSecret(item, opts), opts);
+		emitValue(await readTotpSecret(item, opts), localOpts, opts);
 		return;
 	}
 
@@ -91,7 +150,7 @@ async function emitTotp(
 	});
 
 	emitLog(`Valid for ${totp.secondsRemaining}s`, opts);
-	emitData(totp.code, opts, {
+	emitValue(totp.code, localOpts, opts, {
 		secondsRemaining: totp.secondsRemaining,
 		period: totp.period,
 	});
@@ -119,10 +178,7 @@ function parseFreshSeconds(raw: string | boolean | undefined): number | undefine
  * Accepting `--fresh` on a password would read as "give me a fresh password",
  * which is not what it does. Rejecting it beats quietly ignoring it.
  */
-function assertTotpOnlyFlags(
-	field: string,
-	localOpts: { fresh?: string | boolean; seed?: boolean },
-): void {
+function assertTotpOnlyFlags(field: string, localOpts: GetOptions): void {
 	const used = [
 		localOpts.fresh !== undefined ? "--fresh" : null,
 		localOpts.seed ? "--seed" : null,

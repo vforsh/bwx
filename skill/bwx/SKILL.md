@@ -20,6 +20,7 @@ bwx get item "GitHub"                   # full item JSON
 bwx get number "Visa"                   # card number (also: cvv, expiry, cardholder, brand)
 bwx get "API Key" "Acme"                # custom field by name
 bwx field "API Key" "Acme"              # custom-field-only lookup, same arg order
+bwx get password "GitHub" --raw         # no trailing newline, for piping into stdin
 
 bwx search github                       # fuzzy search, human table
 bwx search github --json                # id/type/name/username only — no secrets
@@ -77,6 +78,22 @@ exactly are delegated to `bw get totp` instead of guessed at.
 
 Custom fields only, so an item whose custom field is named `password` is still reachable.
 Takes its arguments in the same order as `get` (this changed in 0.5.0).
+
+### `--raw` (on `get` and `field`)
+
+Output normally ends in a newline, which a consumer that reads stdin literally takes as
+the last byte of the secret. `--raw` suppresses that one newline and nothing else —
+newlines inside the value are written through, and the value is byte-for-byte, so
+surrounding whitespace survives (the default output trims it).
+
+```bash
+bwx get password "GitHub" --raw | argus fill app --selector 'input[type=password]' --value-stdin
+```
+
+Prefer this over `$(bwx get …)` when piping a secret: command substitution eats trailing
+newlines *and* puts the secret in the child's argv, where any same-user process can read
+it. `--raw` and `--json` cannot be combined (the envelope quotes and wraps the value); use
+`bwx run --env` when a whole command needs the secret in its environment instead.
 
 ### Card fields
 

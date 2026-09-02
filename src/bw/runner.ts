@@ -11,6 +11,13 @@ export interface RunBwOptions {
 	/** Explicit session, or `null` to run without one (login/unlock/status). */
 	session?: string | null;
 	env?: Record<string, string>;
+	/**
+	 * Return stdout as `bw` wrote it, less the single newline `bw` adds to frame
+	 * its own output. The default trim is right for values bwx parses or compares
+	 * and wrong for a secret handed back byte-for-byte: whitespace around a
+	 * password belongs to the password.
+	 */
+	verbatim?: boolean;
 }
 
 /** Deadline for a single `bw` call; overridable with `--timeout`. */
@@ -66,7 +73,11 @@ export async function runBw(
 			);
 		}
 
-		return { stdout: stdout.trim(), stderr: stderr.trim(), exitCode };
+		return {
+			stdout: options?.verbatim ? unframe(stdout) : stdout.trim(),
+			stderr: stderr.trim(),
+			exitCode,
+		};
 	} finally {
 		guard?.disarm();
 	}
@@ -85,6 +96,11 @@ export async function runBwOrThrow(
 		);
 	}
 	return result.stdout;
+}
+
+/** Drops the one newline `bw` prints after a value, and nothing the value owns. */
+function unframe(stdout: string): string {
+	return stdout.replace(/\r?\n$/, "");
 }
 
 /**
