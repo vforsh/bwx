@@ -10,6 +10,12 @@ import {
 import { runBwOrThrow } from "../../bw/runner.ts";
 import { withSession } from "../../bw/session.ts";
 import { resolveFolderFilter } from "../../bw/folders.ts";
+import { withSafeVaultErrors } from "../../bw/safe-errors.ts";
+import type { GlobalOptions } from "../types.ts";
+
+interface SearchOptions extends ItemListOptions {
+	folder?: string;
+}
 
 export function registerSearch(program: Command): void {
 	program
@@ -20,26 +26,37 @@ export function registerSearch(program: Command): void {
 		.option("--type <type>", "Filter by type: login|note|card|identity")
 		.option("--folder <name|id>", "Filter by folder name or ID ('none' for unfiled)")
 		.option("--limit <n>", "Limit results (0 for no limit)", parseLimit)
+		.option("--fields", "Discover available fields and reusable references (no values)")
 		.option("--full-items", "Emit complete item objects (includes secrets)")
 		.action(async function (
 			this: Command,
 			query: string,
-			localOpts: ItemListOptions & { folder?: string },
+			localOpts: SearchOptions,
 		) {
 			const opts = getGlobalOpts(this);
-
-			const args = ["list", "items", "--search", query];
-			if (localOpts.folder) {
-				args.push("--folderid", await resolveFolderFilter(localOpts.folder, opts));
+			if (localOpts.fields && localOpts.fullItems) {
+				throw new CliError("--fields and --full-items cannot be combined.", ExitCode.BadArgs);
 			}
-
-			const json = await withSession(opts, () => runBwOrThrow(args));
-			const filtered = filterItems(JSON.parse(json), localOpts);
-
-			if (filtered.total === 0) {
-				throw new CliError(`No items matching "${query}"`, ExitCode.NotFound);
-			}
-
-			writeItems(filtered, opts, localOpts);
+			const search = () => searchItems(query, localOpts, opts);
+			if (localOpts.fields) await withSafeVaultErrors("Could not discover fields", search);
+			else await search();
 		});
+}
+
+async function searchItems(
+	query: string,
+	localOpts: SearchOptions,
+	opts: GlobalOptions,
+): Promise<void> {
+	const args = ["list", "items", "--search", query];
+	if (localOpts.folder) {
+		args.push("--folderid", await resolveFolderFilter(localOpts.folder, opts));
+	}
+
+	const json = await withSession(opts, () => runBwOrThrow(args));
+	const filtered = filterItems(JSON.parse(json), localOpts);
+	if (filtered.total === 0) {
+		throw new CliError(`No items matching "${query}"`, ExitCode.NotFound);
+	}
+	writeItems(filtered, opts, localOpts);
 }

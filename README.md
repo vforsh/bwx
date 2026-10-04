@@ -69,15 +69,15 @@ unlock. `valid` means reads work now, `stale` means the cached session was rejec
 
 | Command | Description |
 |---------|-------------|
-| `bwx get <field> <item>` | Get field (`password`, `username`, `totp`, `notes`, `uri`, `item`), `--raw` |
+| `bwx get <field> <item>` / `bwx get <ref>` | Get a field or discovered reference, `--raw` |
 | `bwx get totp <item>` | TOTP code (`--fresh [n]`, `--seed`) |
 | `bwx get <card field> <item>` | Card field (`number`, `cvv`, `cardholder`, `brand`, `expiry`, …) |
 | `bwx field <name> <item>` | Get custom field by name (same argument order as `get`), `--raw` |
-| `bwx search <query>` | Search items (`--type`, `--folder`, `--limit`, `--full-items`) |
+| `bwx search <query>` / `bwx find <query>` | Search items (`--fields`, `--type`, `--folder`, `--limit`, `--full-items`) |
 | `bwx list [type]` | List items (`--type`, `--folder`, `--limit`, `--full-items`) |
 | `bwx folders` | List folder names and IDs |
 | `bwx trash` | List items in the trash |
-| `bwx run --env NAME=<field>:<item> -- <cmd>` | Run a command with secrets in its environment |
+| `bwx run --env NAME=<field>:<item> -- <cmd>` / `--env NAME=<ref>` | Run a command with secrets in its environment |
 | `bwx attach list <item>` | List attachments for an item |
 | `bwx attach get <item> <attachment>` | Download attachment by ID or filename |
 
@@ -103,6 +103,63 @@ error: No item matching "GitHub PAT vforsh old". Did you mean:
   934c1f57-…  note  GitHub PAT (vforsh)
   3683fb9a-…  note  GitHub PAT (yaforsh) [codex-monitor-pr]
 ```
+
+### Discover fields without values
+
+`search` (alias `find`) accepts `--fields` to return only item `id`, `type`, `name`,
+and `fields`. Each field has `kind` (`builtin` or `custom`), `name`, `type`, and a
+consumable `ref`. Even usernames and URIs are described without their values in this
+mode. `--fields` cannot be combined with `--full-items`.
+
+```bash
+bwx find "Deploy token" --fields --json
+# { "data": [{ "id": "11111111-2222-3333-4444-555555555555", "type": "note",
+#   "name": "Deploy token", "fields": [{ "kind": "builtin", "name": "notes",
+#   "type": "text", "ref": "bwx://11111111-2222-3333-4444-555555555555/builtin/notes" }] }],
+#   "meta": { "total": 1, "shown": 1, "truncated": false } }
+
+# Copy the ref from discovery. Only the child receives the token.
+bwx run --env 'TOKEN=bwx://11111111-2222-3333-4444-555555555555/builtin/notes' -- ./deploy.sh
+
+# Or pipe the referenced bytes directly to a consumer; get itself prints the value.
+bwx get 'bwx://11111111-2222-3333-4444-555555555555/builtin/notes' --raw | ./consume-token
+```
+
+Supported capabilities:
+
+- Nonempty `notes` on every item type, including Secure Notes containing API tokens.
+- Login `username`, `password`, first `uri`, and `totp` when present. A TOTP reference
+  resolves to a code using the existing local computation or `bw` fallback; it does not
+  carry the seed. `get <totp-ref>` also supports `--fresh` and `--seed`.
+- Card `number`, `cvv`, `cardholder`, `brand`, `expiry`, `expMonth`, `expYear` when
+  available, with the same normalization as `get`. `expiry` needs both month and year.
+- Custom text, hidden, and boolean fields on every item type, including empty values
+  (`null` is read as an empty string). Linked and unknown custom types are omitted.
+  Identity-specific and full-item fields are not advertised.
+
+Field `type` is `text`, `hidden`, `boolean`, or `totp`; these are capability labels,
+not a claim that text fields are safe to print. Notes often hold secrets.
+
+References use `bwx://<item-id>/builtin/<canonical-field>` or
+`bwx://<item-id>/custom/<zero-based-index>/<percent-encoded-name>`. Custom names may
+contain spaces, colons, slashes, percent signs, Unicode, or be empty. A custom field
+named `password` has its own reference and never resolves to the login password.
+Copy references verbatim and quote them in shell commands.
+
+Item renaming does not change references: reads use the exact ID and verify it in the
+response. Custom references address a position and check the name there, which also
+distinguishes duplicate names. Rediscover after renaming/reordering/removing custom
+fields; a changed name at that position fails, while swapping identical names can
+retarget the reference because Bitwarden supplies no custom-field IDs. References
+resolve current values from the local vault; they are not snapshots or access grants.
+
+Filters, the default 50-item cap, `--limit 0`, and truncation warnings/meta work as usual.
+Human output groups fields under each item; `--plain` has four tab-separated columns:
+`id`, `type`, JSON-quoted `name`, and a compact JSON `fields` array, one item per line.
+JSON escaping preserves tabs/newlines in names without breaking rows. Discovery uses
+the existing list response without extra per-item reads. Vault errors and malformed
+responses are reported without raw diagnostics or value-bearing parse excerpts,
+including under `-v`.
 
 ### Piping a secret
 
@@ -238,10 +295,14 @@ bwx run --env DB_PASS=password:'Prod DB' --env TOKEN='API Key:Acme' -- ./deploy.
 
 - `--env NAME=<field>:<item>` is repeatable; the field resolves exactly as in `bwx get`
   (built-ins first, otherwise a custom field name).
+- `--env NAME=<ref>` accepts references from `search --fields`, including explicit
+  custom-field references. Several references to the same item share one vault read.
 - The item may contain colons — only the first one separates field from item.
 - Use `--` before the command whenever it takes its own flags.
 - The child inherits stdio and bwx exits with the child's status (`128 + signal` when killed).
 - `-v` logs the injected variable *names*; values are never logged.
+
+The child inherits stdout/stderr, so choose a consumer that does not print its secrets.
 
 ### Vault freshness
 

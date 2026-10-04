@@ -1,9 +1,12 @@
 import type { Command } from "commander";
 import { getGlobalOpts } from "../program.ts";
 import { emitData, emitLog, emitRaw } from "../io.ts";
-import { BUILTIN_FIELDS, readItemField, readTotp, readTotpSecret } from "../../bw/fields.ts";
+import {
+	BUILTIN_FIELDS, readItemField, readTotp, readTotpSecret, type FieldRequest,
+} from "../../bw/fields.ts";
 import { CARD_FIELDS } from "../../bw/cards.ts";
 import { CliError, ExitCode } from "../errors.ts";
+import { parseFieldReference, REFERENCE_PREFIX } from "../../bw/references.ts";
 import type { GlobalOptions } from "../types.ts";
 
 /** Seconds left below which `--fresh` waits, when the flag is given bare. */
@@ -22,12 +25,12 @@ interface GetOptions {
 export function registerGet(program: Command): void {
 	program
 		.command("get")
-		.description("Get a field from a vault item (built-in or custom)")
+		.description("Get a field from a vault item or a discovered bwx:// reference")
 		.argument(
 			"<field>",
-			`Field: ${BUILTIN_FIELDS.join(" | ")} | <custom>. Card items also take: ${CARD_FIELDS.join(" | ")}`,
+			`Field or bwx:// ref: ${BUILTIN_FIELDS.join(" | ")} | <custom>. Card items also take: ${CARD_FIELDS.join(" | ")}`,
 		)
-		.argument("<item>", "Item name or ID")
+		.argument("[item]", "Item name or ID (omit when the field is a bwx:// reference)")
 		.option(
 			"--fresh [seconds]",
 			`Wait for the next TOTP window if fewer than N seconds remain (default ${DEFAULT_FRESH_SECONDS})`,
@@ -37,26 +40,28 @@ export function registerGet(program: Command): void {
 		.action(async function (
 			this: Command,
 			field: string,
-			item: string,
+			item: string | undefined,
 			localOpts: GetOptions,
 		) {
 			const opts = getGlobalOpts(this);
 			assertRawUsable(localOpts, opts);
+			const request = parseGetRequest(field, item);
 
-			if (field === "totp") {
-				await emitTotp(item, localOpts, opts);
+			if (request.field === "totp" && !request.options?.customOnly) {
+				await emitTotp(request.item, localOpts, opts, request.options?.exactItemId);
 				return;
 			}
 
-			assertTotpOnlyFlags(field, localOpts);
+			assertTotpOnlyFlags(request.field, localOpts);
 
-			const value = await readItemField(field, item, opts, {
+			const value = await readItemField(request.field, request.item, opts, {
+				...request.options,
 				verbatim: localOpts.raw,
 			});
 
 			// `item` is the one field that is itself JSON, so it is emitted as
 			// structure — except under `--raw`, which promised the bytes `bw` gave us.
-			if (field === "item" && !localOpts.raw) {
+			if (request.field === "item" && !request.options?.customOnly && !localOpts.raw) {
 				emitData(JSON.parse(value), opts);
 				return;
 			}
@@ -88,6 +93,20 @@ export function registerGet(program: Command): void {
 				throw withOrderHint(err);
 			}
 		});
+}
+
+function parseGetRequest(field: string, item: string | undefined): FieldRequest {
+	if (field.startsWith(REFERENCE_PREFIX)) {
+		const reference = parseFieldReference(field);
+		if (item !== undefined) {
+			throw new CliError("A field reference already contains the item ID; omit <item>.", ExitCode.BadArgs);
+		}
+		return reference;
+	}
+	if (item === undefined) {
+		throw new CliError("Expected get <field> <item> or get <ref>.", ExitCode.BadArgs);
+	}
+	return { field, item };
 }
 
 /**
@@ -131,6 +150,7 @@ async function emitTotp(
 	item: string,
 	localOpts: GetOptions,
 	opts: GlobalOptions,
+	exactItemId = false,
 ): Promise<void> {
 	if (localOpts.seed) {
 		if (localOpts.fresh !== undefined) {
@@ -139,11 +159,12 @@ async function emitTotp(
 				ExitCode.BadArgs,
 			);
 		}
-		emitValue(await readTotpSecret(item, opts), localOpts, opts);
+		emitValue(await readTotpSecret(item, opts, exactItemId), localOpts, opts);
 		return;
 	}
 
 	const totp = await readTotp(item, opts, {
+		exactItemId,
 		minSecondsRemaining: parseFreshSeconds(localOpts.fresh),
 		onWait: (seconds) =>
 			emitLog(`Waiting ${seconds}s for a fresh code…`, opts),

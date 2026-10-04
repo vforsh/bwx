@@ -56,6 +56,22 @@ export const BwFieldType = {
 
 export type BwFieldType = (typeof BwFieldType)[keyof typeof BwFieldType];
 
+/** Only these custom field types have a supported value reader. */
+export function customFieldTypeLabel(
+	type: number,
+): "text" | "hidden" | "boolean" | undefined {
+	switch (type) {
+		case BwFieldType.Text:
+			return "text";
+		case BwFieldType.Hidden:
+			return "hidden";
+		case BwFieldType.Boolean:
+			return "boolean";
+		default:
+			return undefined;
+	}
+}
+
 export interface BwField {
 	name: string;
 	value: string;

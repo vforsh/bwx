@@ -4,6 +4,7 @@ import type { GlobalOptions } from "../cli/types.ts";
 import { isCardField, readCardValue, CARD_FIELDS } from "./cards.ts";
 import { summarizeItem, type ItemSummary } from "./items.ts";
 import { runBwOrThrow } from "./runner.ts";
+import { withSafeVaultErrors } from "./safe-errors.ts";
 import { withSession } from "./session.ts";
 import {
 	DEFAULT_PERIOD,
@@ -13,7 +14,9 @@ import {
 	TotpUnsupportedError,
 	type TotpCode,
 } from "./totp.ts";
-import { BwItemSchema, BwItemType, itemTypeLabel, type BwItem } from "./types.ts";
+import {
+	BwItemSchema, BwItemType, customFieldTypeLabel, itemTypeLabel, type BwItem,
+} from "./types.ts";
 
 /** Fields `bw get` resolves natively; anything else is a card or custom field. */
 export const BUILTIN_FIELDS = [
@@ -35,6 +38,10 @@ function isTotpField(field: string, options?: ReadFieldOptions): boolean {
 }
 
 export interface ReadFieldOptions {
+	/** Reference reads require an exact ID and never print raw vault diagnostics. */
+	exactItemId?: boolean;
+	/** Position plus name identifies a custom field, including duplicate names. */
+	customIndex?: number;
 	/**
 	 * Always resolve `field` as a custom field name, so an item whose custom
 	 * field is called e.g. `password` is still reachable.
@@ -74,6 +81,16 @@ export async function readItemField(
 	opts: GlobalOptions,
 	options?: ReadFieldOptions,
 ): Promise<string> {
+	if (options?.exactItemId) {
+		return withSafeVaultErrors("Could not read field reference", async () => {
+			const values = await resolveFields([{ field, item, options }], opts);
+			const value = values[0]!;
+			if (options.verbatim || options.customOnly || isCardField(field)) return value;
+			const trimmed = value.trim();
+			if (!trimmed) throw new FieldMissingError("Field has no value", ExitCode.NotFound);
+			return trimmed;
+		});
+	}
 	return withLookupHelp(item, opts, async () => {
 		if (isTotpField(field, options)) {
 			const nextCode = resolveTotpSource(await fetchItem(item, opts), item, opts);
@@ -95,6 +112,7 @@ export async function readItemField(
 }
 
 export interface ReadTotpOptions {
+	exactItemId?: boolean;
 	/**
 	 * Wait for the next window when the code has fewer than this many seconds
 	 * left, rather than handing back one that expires on the way to the prompt.
@@ -115,21 +133,25 @@ export async function readTotp(
 	opts: GlobalOptions,
 	options?: ReadTotpOptions,
 ): Promise<TotpCode> {
-	return withLookupHelp(item, opts, async () => {
-		const nextCode = resolveTotpSource(await fetchItem(item, opts), item, opts);
+	const read = async () => {
+		const fetched = await fetchItem(item, opts, options?.exactItemId);
+		const nextCode = resolveTotpSource(fetched, item, opts);
 		return awaitUsableWindow(nextCode, options);
-	});
+	};
+	return withFieldLookup(item, opts, options?.exactItemId, read);
 }
 
 /** The stored secret itself, for moving a seed back out to another authenticator. */
 export async function readTotpSecret(
 	item: string,
 	opts: GlobalOptions,
+	exactItemId = false,
 ): Promise<string> {
-	return withLookupHelp(item, opts, async () => {
-		const fetched = await fetchItem(item, opts);
+	const read = async () => {
+		const fetched = await fetchItem(item, opts, exactItemId);
 		return requireStoredTotp(fetched);
-	});
+	};
+	return withFieldLookup(item, opts, exactItemId, read);
 }
 
 function requireStoredTotp(item: BwItem): string {
@@ -211,6 +233,16 @@ export async function readFields(
 	requests: FieldRequest[],
 	opts: GlobalOptions,
 ): Promise<string[]> {
+	const read = () => resolveFields(requests, opts);
+	return requests.some((request) => request.options?.exactItemId)
+		? withSafeVaultErrors("Could not read field reference", read)
+		: read();
+}
+
+async function resolveFields(
+	requests: FieldRequest[],
+	opts: GlobalOptions,
+): Promise<string[]> {
 	const values = new Array<string>(requests.length);
 	const byItem = new Map<string, number[]>();
 
@@ -223,14 +255,20 @@ export async function readFields(
 	for (const [item, indexes] of byItem) {
 		// A single `bw` process at a time: each read may trigger an unlock, and
 		// concurrent unlocks would race over the cached session.
-		const fetched = await withLookupHelp(item, opts, () => fetchItem(item, opts));
+		const exact = indexes.some((index) => requests[index]!.options?.exactItemId);
+		const fetched = exact
+			? await fetchItem(item, opts, true)
+			: await withLookupHelp(item, opts, () => fetchItem(item, opts));
 
 		for (const index of indexes) {
 			const request = requests[index]!;
 
 			if (isTotpField(request.field, request.options)) {
 				const nextCode = resolveTotpSource(fetched, item, opts);
-				values[index] = (await withLookupHelp(item, opts, nextCode)).code;
+				const code = exact
+					? await nextCode()
+					: await withLookupHelp(item, opts, nextCode);
+				values[index] = code.code;
 			} else {
 				values[index] = extractField(fetched, request.field, request.options);
 			}
@@ -238,6 +276,17 @@ export async function readFields(
 	}
 
 	return values;
+}
+
+/** Exact references suppress raw diagnostics; named lookups retain suggestions. */
+function withFieldLookup<T>(
+	item: string,
+	opts: GlobalOptions,
+	exactItemId: boolean | undefined,
+	read: () => Promise<T>,
+): Promise<T> {
+	if (exactItemId) return withSafeVaultErrors("Could not read field reference", read);
+	return withLookupHelp(item, opts, read);
 }
 
 /**
@@ -272,9 +321,17 @@ async function withLookupHelp<T>(
 	}
 }
 
-async function fetchItem(item: string, opts: GlobalOptions): Promise<BwItem> {
+async function fetchItem(
+	item: string,
+	opts: GlobalOptions,
+	exactItemId = false,
+): Promise<BwItem> {
 	const json = await withSession(opts, () => runBwOrThrow(["get", "item", item]));
-	return BwItemSchema.parse(JSON.parse(json));
+	const fetched = BwItemSchema.parse(JSON.parse(json));
+	if (exactItemId && fetched.id.toLowerCase() !== item.toLowerCase()) {
+		throw new CliError("Vault returned a different item ID", ExitCode.BwError);
+	}
+	return fetched;
 }
 
 /** Mirrors what `bw get <field>` would have returned for an already-fetched item. */
@@ -283,6 +340,9 @@ function extractField(
 	field: string,
 	options?: ReadFieldOptions,
 ): string {
+	if (options?.customIndex !== undefined) {
+		return pickReferencedCustomField(item, options.customIndex, field);
+	}
 	if (options?.customOnly) return pickCustomField(item, field);
 
 	// A card field only means the card object on a card item. On anything else
@@ -290,6 +350,9 @@ function extractField(
 	// break lookups that worked before cards were understood at all — so the
 	// name is resolved as one, and the miss says what the item actually is.
 	if (isCardField(field)) {
+		if (options?.exactItemId && item.type !== BwItemType.Card) {
+			throw new FieldMissingError("No built-in card field on this item", ExitCode.NotFound);
+		}
 		return item.type === BwItemType.Card
 			? extractCardField(item, field)
 			: pickCustomField(item, field, cardFieldHint(item, field));
@@ -396,6 +459,15 @@ function pickCustomField(item: BwItem, fieldName: string, hint?: string): string
 	}
 
 	return match.value ?? "";
+}
+
+/** Position plus name guards a custom reference against moved or removed fields. */
+function pickReferencedCustomField(item: BwItem, index: number, name: string): string {
+	const field = item.fields?.[index];
+	if (!field || field.name !== name || customFieldTypeLabel(field.type) === undefined) {
+		throw new CliError("Custom field reference changed; discover fields again", ExitCode.BadArgs);
+	}
+	return field.value ?? "";
 }
 
 async function findMatches(query: string): Promise<ItemSummary[]> {

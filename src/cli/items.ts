@@ -1,5 +1,6 @@
 import pc from "picocolors";
 import { summarizeItem, type ItemSummary } from "../bw/items.ts";
+import { discoverItem, type ItemDiscovery } from "../bw/discovery.ts";
 import { BW_TYPE_FROM_NAME } from "../bw/types.ts";
 import { CliError, ExitCode } from "./errors.ts";
 import { emitData, emitWarn } from "./io.ts";
@@ -18,6 +19,8 @@ export interface ItemListOptions {
 	limit?: number;
 	/** Opt in to raw bw items, which carry passwords, notes, and custom fields. */
 	fullItems?: boolean;
+	/** Metadata and consumable references only; never field values. */
+	fields?: boolean;
 }
 
 export interface FilteredItems {
@@ -67,6 +70,7 @@ export function filterItems(
  * the same reduced projection, so asking for machine-readable output is a
  * serialization choice and never widens data access. `--full-items` is the
  * explicit opt-in for callers that genuinely need the complete objects.
+ * `--fields` uses a separate allowlist for capabilities and consumable refs.
  *
  * A truncated listing reports what it dropped through every channel — a stderr
  * warning that survives `--json`, plus `meta` in the JSON envelope — because a
@@ -79,6 +83,8 @@ export function writeItems(
 ): void {
 	const { items, total } = filtered;
 	const omitted = total - items.length;
+	// Project the whole response before emitting anything, including warnings.
+	const discovery = options.fields ? items.map(discoverItem) : undefined;
 
 	if (omitted > 0) {
 		emitWarn(
@@ -88,11 +94,18 @@ export function writeItems(
 	}
 
 	if (opts.json) {
+		let data: unknown = items;
+		if (discovery) data = discovery;
+		else if (!options.fullItems) data = items.map(summarizeItem);
 		emitData(
-			options.fullItems ? items : items.map(summarizeItem),
+			data,
 			opts,
 			{ total, shown: items.length, truncated: omitted > 0 },
 		);
+		return;
+	}
+	if (discovery) {
+		writeLines(discovery, opts.plain ? plainDiscovery : humanDiscovery);
 		return;
 	}
 
@@ -104,6 +117,18 @@ export function writeItems(
 	}
 
 	writeLines(items.map(summarizeItem), opts.plain ? plainLine : humanLine);
+}
+
+function plainDiscovery(item: ItemDiscovery): string {
+	return `${item.id}\t${item.type}\t${JSON.stringify(item.name)}\t${JSON.stringify(item.fields)}`;
+}
+
+function humanDiscovery(item: ItemDiscovery): string {
+	const header = `${pc.dim(item.id)}  ${pc.cyan(item.type)}  ${JSON.stringify(item.name)}`;
+	const fields = item.fields.map((field) =>
+		`  ${field.kind} ${JSON.stringify(field.name)} [${field.type}]  ${field.ref}`,
+	);
+	return [header, ...fields].join("\n");
 }
 
 function plainLine(summary: ItemSummary): string {

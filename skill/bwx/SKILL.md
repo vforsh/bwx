@@ -23,8 +23,9 @@ bwx field "API Key" "Acme"              # custom-field-only lookup, same arg ord
 bwx get password "GitHub" --raw         # no trailing newline, for piping into stdin
 
 bwx search github                       # fuzzy search, human table
-bwx search github --json                # id/type/name/username only — no secrets
+bwx search github --json                # id/type/name/username/hasTotp — no secret contents
 bwx search github --type login --limit 5
+bwx find "Deploy token" --fields --json # available fields and refs, never their values
 
 # hand a secret to a child process instead of printing it
 bwx run --env KEENETIC_PASS=password:'http://my.keenetic.net' -- expect ./recovery.exp
@@ -44,11 +45,14 @@ echo "secret" | bwx create --name "Piped Note"
 
 ## Commands
 
-### `bwx get <field> <item>`
+### `bwx get <field> <item>` / `bwx get <ref>`
 
 Built-in fields: `password | username | totp | notes | uri | item`.
 Card items additionally take `number | cvv | cardholder | brand | expiry | expMonth | expYear`.
 Anything else is looked up as a custom field. Lists available fields on miss.
+Discovered `bwx://` references also work as the sole argument, including with `--raw`.
+`get` prints the referenced value: pipe it straight to a consumer instead of capturing
+it in an agent's context. TOTP references support `--fresh` and `--seed` as usual.
 
 A miss suggests near matches; an ambiguous name lists candidates with IDs. Read the
 suggestions instead of retrying variations — the answer is usually in them.
@@ -119,6 +123,7 @@ card field.
 ### `bwx search <query>` / `bwx list [type]`
 
 Flags: `--type login|note|card|identity`, `--folder <name|id>`, `--limit <n>`, `--full-items`
+`search` has alias `find` and additionally accepts `--fields` for field discovery.
 
 Human, `--plain`, and `--json` output all carry the same reduced projection — `id`, `type`,
 `name`, `username`, `hasTotp` — so listings never leak passwords, notes, or custom fields.
@@ -133,12 +138,56 @@ logged sessions.
 reported on stderr and in `meta` on the JSON envelope — check it before concluding a listing
 was complete. `--limit` rejects non-numeric values rather than ignoring them.
 
+### Discovery → consume a reference
+
+Use `bwx search <query> --fields --json` to find an item and its available fields
+without reading `get item` or `--full-items`. Output is an explicit allowlist:
+item `id`, `type`, `name`, and `fields`; each field has only `kind`, `name`, `type`,
+and `ref`. Username/URI values are omitted too. `--fields` conflicts with `--full-items`.
+
+```bash
+bwx find "Deploy token" --fields --json
+# A Secure Note with content advertises:
+# { "kind": "builtin", "name": "notes", "type": "text",
+#   "ref": "bwx://11111111-2222-3333-4444-555555555555/builtin/notes" }
+
+# Copy that ref into run. The token goes only to the consumer's environment.
+bwx run --env 'TOKEN=bwx://11111111-2222-3333-4444-555555555555/builtin/notes' -- ./deploy.sh
+
+# If the consumer needs stdin, pipe directly; do not inspect get's stdout.
+bwx get 'bwx://11111111-2222-3333-4444-555555555555/builtin/notes' --raw | ./consume-token
+```
+
+- Nonempty `notes` appear on all item types. **API tokens commonly live in notes on
+  Secure Notes**; `text` describes the field type and does not mean its content is public.
+- Logins advertise nonempty `username`, `password`, first `uri`, and `totp`. TOTP
+  references yield codes through the existing computation/fallback, never the seed
+  unless explicitly consumed with `get <ref> --seed`.
+- Cards advertise available canonical card fields with existing normalization;
+  `expiry` requires both month and year. Identity-specific/full-item fields are omitted.
+- Custom text/hidden/boolean fields on any item type appear even with empty values;
+  null values resolve as empty strings. Linked/unknown types are omitted.
+- `kind` separates builtins and custom fields; custom `password`, `totp`, `item`, or
+  `cvv` references select the custom field. Types: `text`, `hidden`, `boolean`, `totp`.
+- Builtin syntax: `bwx://<item-id>/builtin/<canonical-field>`. Custom syntax:
+  `bwx://<item-id>/custom/<zero-based-index>/<percent-encoded-name>`. Copy verbatim and
+  shell-quote; empty names, duplicate names, Unicode and separators work.
+- Item renaming preserves refs. Custom refs check the name at the recorded position:
+  rediscover after changing field names/order. Swapping identical names can retarget
+  refs, since Bitwarden has no custom-field IDs. Refs read current local values and
+  require ordinary vault access; they are not snapshots or access grants.
+- Filters, caps, truncation warnings and JSON `meta` remain available. `--plain` emits
+  one item per line: `id`, `type`, JSON-quoted `name`, JSON `fields`, separated by tabs.
+  Human output groups fields under items. Neither prints values.
+- Discovery and reference-read failures suppress raw vault diagnostics and parse
+  excerpts, including in verbose mode. They retain the error exit code.
+
 ### `bwx folders`
 
 Lists folder names and IDs. `--folder` accepts either on `list`, `search`, `create`, and
 `edit`; `none` selects unfiled items.
 
-### `bwx run --env NAME=<field>:<item> -- <command>`
+### `bwx run --env NAME=<field>:<item> -- <command>` / `--env NAME=<ref>`
 
 Resolves secrets and injects them into the child's environment only — not stdout, not argv.
 This is the preferred way to give a subprocess a credential.
@@ -149,12 +198,14 @@ bwx run --env TOKEN='API Key:Acme' --env USER=username:Acme -- ./deploy.sh
 ```
 
 - `--env` is repeatable; the field resolves as in `bwx get` (built-in, else card, else custom field).
+- A discovered `bwx://` ref selects an exact item ID and explicit builtin/custom field.
 - Only the first `:` splits field from item, so `password:http://my.router` works.
 - Put `--` before the command when it takes its own flags.
 - Child stdio is inherited; bwx exits with the child's status (`128 + signal` if killed).
 - `-v` logs injected variable names only, never values.
 - Several variables from one item cost a single vault read, so group them here rather
   than issuing separate `bwx get` calls.
+- Child stdout/stderr are inherited: use a consumer that does not print its credentials.
 
 ### `bwx attach list <item>`
 
@@ -266,6 +317,7 @@ even under `--json`; `-q` silences them.
 ## Safety rules
 
 - Never use `--full-items` (or `get item` for discovery) in logged sessions.
+- Discover with `search/find --fields`; pass its `ref` straight to `run --env NAME=<ref>`.
 - Prefer `bwx run --env ...` over `export VAR="$(bwx get ...)"`; secrets never touch stdout or argv.
 - Prefer `--password-generate` over generating a secret yourself and passing it in.
 - Request the narrowest field, resolving an exact item ID first.

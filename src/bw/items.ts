@@ -1,8 +1,7 @@
 import { itemTypeLabel } from "./types.ts";
 
 /**
- * The only shape of a vault item bwx prints when the caller did not ask for a
- * specific secret. Enough to identify an item and follow up with a narrow `get`,
+ * Default listing shape. Enough to identify an item and follow up with a narrow `get`,
  * with no room for passwords, notes, custom fields, or URIs to leak into logs.
  */
 export interface ItemSummary {
