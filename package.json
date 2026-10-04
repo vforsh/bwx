@@ -1,6 +1,6 @@
 {
   "name": "bwx",
-  "version": "0.8.1",
+  "version": "0.9.0",
   "description": "Extended Bitwarden CLI for scripts and agents — auto-unlock via macOS Keychain, session caching, local TOTP, structured output",
   "keywords": [
     "bitwarden",
