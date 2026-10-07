@@ -43,10 +43,8 @@
     "cmd": "bun run bin/bwx"
   },
   "devDependencies": {
-    "@types/bun": "latest"
-  },
-  "peerDependencies": {
-    "typescript": "^5"
+    "@types/bun": "latest",
+    "typescript": "^7"
   },
   "dependencies": {
     "commander": "^14.0.3",
