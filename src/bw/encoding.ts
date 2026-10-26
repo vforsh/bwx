@@ -1,4 +1,4 @@
-import type { BwField, BwFieldType, BwItem, BwItemType, BwUri } from "./types.ts";
+import type { BwCard, BwField, BwFieldType, BwItem, BwItemType, BwUri } from "./types.ts";
 import { BwFieldType as FT, BwItemType as IT } from "./types.ts";
 
 // --- Field flag parsing ---
@@ -35,21 +35,27 @@ export function parseFieldFlag(raw: string): ParsedField {
 // --- Build new item JSON ---
 
 export interface NewItemOptions {
-	type?: "login" | "note";
+	type?: "login" | "note" | "card";
 	name: string;
 	notes?: string | null;
 	username?: string | null;
 	password?: string | null;
 	totp?: string | null;
 	uris?: string[];
+	card?: BwCard;
 	fields?: ParsedField[];
 	folderId?: string | null;
 	favorite?: boolean;
 }
 
+const ITEM_TYPE_BY_NAME = {
+	login: IT.Login,
+	note: IT.SecureNote,
+	card: IT.Card,
+} as const;
+
 export function buildNewItem(options: NewItemOptions): Record<string, unknown> {
-	const isLogin = options.type === "login";
-	const itemType: BwItemType = isLogin ? IT.Login : IT.SecureNote;
+	const itemType: BwItemType = ITEM_TYPE_BY_NAME[options.type ?? "note"];
 
 	const item: Record<string, unknown> = {
 		organizationId: null,
@@ -62,7 +68,7 @@ export function buildNewItem(options: NewItemOptions): Record<string, unknown> {
 		reprompt: 0,
 	};
 
-	if (isLogin) {
+	if (itemType === IT.Login) {
 		item.login = {
 			username: options.username ?? null,
 			password: options.password ?? null,
@@ -71,6 +77,17 @@ export function buildNewItem(options: NewItemOptions): Record<string, unknown> {
 				? options.uris.map((uri) => ({ match: null, uri }))
 				: null,
 		};
+	} else if (itemType === IT.Card) {
+		item.card = {
+			cardholderName: null,
+			brand: null,
+			number: null,
+			expMonth: null,
+			expYear: null,
+			code: null,
+			...options.card,
+		};
+		item.login = null;
 	} else {
 		item.secureNote = { type: 0 };
 		item.login = null;
@@ -99,6 +116,8 @@ export interface PatchOptions {
 	/** `null` clears the stored secret; `undefined` leaves it alone. */
 	totp?: string | null;
 	uris?: string[];
+	/** Each key: a value sets it, `null` clears it, absent leaves it alone. */
+	card?: BwCard;
 	addFields?: ParsedField[];
 	rmFields?: string[];
 	/** `null` unfiles the item; `undefined` leaves its folder alone. */
@@ -134,6 +153,14 @@ export function patchItem(
 			login.uris = patch.uris.map((uri) => ({ match: null, uri }));
 		}
 		result.login = login;
+	}
+
+	if (patch.card && Object.keys(patch.card).length > 0) {
+		// Copied for the same reason as `login` above.
+		result.card = {
+			...((result.card as Record<string, unknown>) ?? {}),
+			...patch.card,
+		};
 	}
 
 	// Fields: remove then add

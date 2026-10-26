@@ -1,6 +1,7 @@
 import type { Command } from "commander";
 import { parseFieldFlag, type ParsedField } from "../bw/encoding.ts";
 import { normalizeTotpInput } from "../bw/totp.ts";
+import { normalizeCardNumber, normalizeCvv } from "../bw/card-input.ts";
 import { CliError, ExitCode } from "./errors.ts";
 
 export function collect(val: string, prev: string[]): string[] {
@@ -65,6 +66,16 @@ export interface ItemTextInputs {
 	totpStdin?: boolean;
 	totpFile?: string;
 	totpEnv?: string;
+	number?: string;
+	numberStdin?: boolean;
+	numberFile?: string;
+	numberEnv?: string;
+	cvv?: string;
+	cvvStdin?: boolean;
+	cvvFile?: string;
+	cvvEnv?: string;
+	/** `--no-validate` sets this false, skipping the card number's Luhn check. */
+	validate?: boolean;
 }
 
 export interface ResolvedItemTextInputs {
@@ -74,12 +85,18 @@ export interface ResolvedItemTextInputs {
 	passwordGenerated?: boolean;
 	/** Normalized and validated by {@link normalizeTotpInput} before it is stored. */
 	totp?: string;
+	/** Digits only, checked by {@link normalizeCardNumber}. */
+	number?: string;
+	cvv?: string;
 }
 
 export interface ExplicitStdinInputs extends ItemTextInputs {
 	fieldFileFlag?: string;
 	fieldFiles?: string[];
 }
+
+/** The item type a value can only be stored on. */
+export type ItemTypeName = "login" | "card";
 
 /** Which slot of a {@link TextSource} a flag fills. */
 type TextSourceKind = "inline" | "stdin" | "file" | "env" | "generate";
@@ -89,29 +106,28 @@ interface TextInputFlag {
 	spec: string;
 	description: string;
 	/** The property commander derives from `spec`. */
-	key: keyof ItemTextInputs;
+	key: Exclude<keyof ItemTextInputs, "validate">;
 	kind: TextSourceKind;
 }
 
 /**
  * One value a caller can supply, and every flag that can supply it. Option
  * registration, the "choose only one source" error, the stdin-conflict check and
- * the login-only guard all read from here, so adding a source touches one table
+ * the item-type guards all read from here, so adding a source touches one table
  * rather than both write commands and three hand-kept lists.
  */
 export interface TextInputFamily {
 	/** Names the value in error messages. */
 	label: string;
 	flags: TextInputFlag[];
-	/** True when only a login item has anywhere to store the value. */
-	loginOnly: boolean;
+	/** The only item type with anywhere to store the value; unset means any. */
+	itemType?: ItemTypeName;
 	/** Whether empty is a legitimate value — it is, for notes. */
 	allowEmpty?: boolean;
 }
 
 const NOTES_FAMILY: TextInputFamily = {
 	label: "notes",
-	loginOnly: false,
 	allowEmpty: true,
 	flags: [
 		{
@@ -131,7 +147,7 @@ const NOTES_FAMILY: TextInputFamily = {
 
 const PASSWORD_FAMILY: TextInputFamily = {
 	label: "password",
-	loginOnly: true,
+	itemType: "login",
 	flags: [
 		{
 			spec: "--password <pass>",
@@ -168,7 +184,7 @@ const PASSWORD_FAMILY: TextInputFamily = {
 
 export const TOTP_FAMILY: TextInputFamily = {
 	label: "TOTP secret",
-	loginOnly: true,
+	itemType: "login",
 	flags: [
 		{
 			spec: "--totp <secret>",
@@ -197,7 +213,75 @@ export const TOTP_FAMILY: TextInputFamily = {
 	],
 };
 
-const ITEM_TEXT_FAMILIES = [NOTES_FAMILY, PASSWORD_FAMILY, TOTP_FAMILY];
+export const CARD_NUMBER_FAMILY: TextInputFamily = {
+	label: "card number",
+	itemType: "card",
+	flags: [
+		{
+			spec: "--number <number>",
+			description: "Card number (card items only)",
+			key: "number",
+			kind: "inline",
+		},
+		{
+			spec: "--number-stdin",
+			description: "Read the card number from stdin",
+			key: "numberStdin",
+			kind: "stdin",
+		},
+		{
+			spec: "--number-file <path>",
+			description: "Read the card number from file (use - for stdin)",
+			key: "numberFile",
+			kind: "file",
+		},
+		{
+			spec: "--number-env <name>",
+			description: "Read the card number from environment variable",
+			key: "numberEnv",
+			kind: "env",
+		},
+	],
+};
+
+export const CVV_FAMILY: TextInputFamily = {
+	label: "CVV",
+	itemType: "card",
+	flags: [
+		{
+			spec: "--cvv <cvv>",
+			description: "Card security code (card items only)",
+			key: "cvv",
+			kind: "inline",
+		},
+		{
+			spec: "--cvv-stdin",
+			description: "Read the CVV from stdin",
+			key: "cvvStdin",
+			kind: "stdin",
+		},
+		{
+			spec: "--cvv-file <path>",
+			description: "Read the CVV from file (use - for stdin)",
+			key: "cvvFile",
+			kind: "file",
+		},
+		{
+			spec: "--cvv-env <name>",
+			description: "Read the CVV from environment variable",
+			key: "cvvEnv",
+			kind: "env",
+		},
+	],
+};
+
+const ITEM_TEXT_FAMILIES = [
+	NOTES_FAMILY,
+	PASSWORD_FAMILY,
+	TOTP_FAMILY,
+	CARD_NUMBER_FAMILY,
+	CVV_FAMILY,
+];
 
 function flagName(spec: string): string {
 	return spec.split(" ")[0]!;
@@ -208,8 +292,8 @@ function sourceFlagNames(family: TextInputFamily): string[] {
 }
 
 /**
- * Registers every flag that can supply notes, a password, or a TOTP secret, plus
- * the length modifier `--password-generate` takes. `create` and `edit` accept the
+ * Registers every flag that can supply notes, a password, a TOTP secret, a card
+ * number, or a CVV, plus the length modifier `--password-generate` takes. `create` and `edit` accept the
  * identical set and {@link resolveItemTextInputs} is their only reader, so the
  * set is declared once here instead of per command.
  */
@@ -220,26 +304,34 @@ export function registerItemTextOptions(command: Command): Command {
 		}
 	}
 
-	return command.option(
-		"--generate-length <n>",
-		"Length for --password-generate",
-		(value) => Number.parseInt(value, 10),
-	);
+	return command
+		.option(
+			"--generate-length <n>",
+			"Length for --password-generate",
+			(value) => Number.parseInt(value, 10),
+		)
+		.option("--no-validate", "Skip the card number's Luhn check");
 }
 
 /**
- * The `[key, flag]` pairs a command must reject on a non-login item, because
- * `buildNewItem` and `patchItem` have nowhere to put them and would accept the
- * value only to drop it.
+ * The `[key, flag]` pairs a command must reject on an item of any other type,
+ * because `buildNewItem` and `patchItem` have nowhere to put them and would
+ * accept the value only to drop it.
  */
-export function loginOnlyTextInputFlags(): Array<[keyof ItemTextInputs, string]> {
-	return ITEM_TEXT_FAMILIES.filter((family) => family.loginOnly).flatMap(
+export function typeOnlyTextInputFlags(
+	itemType: ItemTypeName,
+): Array<[keyof ItemTextInputs, string]> {
+	return ITEM_TEXT_FAMILIES.filter((family) => family.itemType === itemType).flatMap(
 		(family) =>
 			family.flags.map(
 				(flag) =>
 					[flag.key, flagName(flag.spec)] as [keyof ItemTextInputs, string],
 			),
 	);
+}
+
+export function loginOnlyTextInputFlags(): Array<[keyof ItemTextInputs, string]> {
+	return typeOnlyTextInputFlags("login");
 }
 
 /** The flags a caller actually used to supply this family's value. */
@@ -259,43 +351,15 @@ export async function resolveItemTextInputs(
 ): Promise<ResolvedItemTextInputs> {
 	assertSingleStdinSource(listExplicitStdinInputs(inputs));
 
-	const [notes, password, totp] = await Promise.all([
+	const [notes, password, totp, number, cvv] = await Promise.all([
+		resolveOptionalTextSource(familySource(NOTES_FAMILY, inputs), stdin),
 		resolveOptionalTextSource(
-			{
-				label: NOTES_FAMILY.label,
-				inline: inputs.notes,
-				file: inputs.notesFile,
-				flagNames: sourceFlagNames(NOTES_FAMILY),
-				allowEmpty: NOTES_FAMILY.allowEmpty,
-			},
+			familySource(PASSWORD_FAMILY, inputs, generatePassword),
 			stdin,
 		),
-		resolveOptionalTextSource(
-			{
-				label: PASSWORD_FAMILY.label,
-				inline: inputs.password,
-				stdin: inputs.passwordStdin,
-				file: inputs.passwordFile,
-				env: inputs.passwordEnv,
-				generate:
-					inputs.passwordGenerate && generatePassword
-						? generatePassword
-						: undefined,
-				flagNames: sourceFlagNames(PASSWORD_FAMILY),
-			},
-			stdin,
-		),
-		resolveOptionalTextSource(
-			{
-				label: TOTP_FAMILY.label,
-				inline: inputs.totp,
-				stdin: inputs.totpStdin,
-				file: inputs.totpFile,
-				env: inputs.totpEnv,
-				flagNames: sourceFlagNames(TOTP_FAMILY),
-			},
-			stdin,
-		),
+		resolveOptionalTextSource(familySource(TOTP_FAMILY, inputs), stdin),
+		resolveOptionalTextSource(familySource(CARD_NUMBER_FAMILY, inputs), stdin),
+		resolveOptionalTextSource(familySource(CVV_FAMILY, inputs), stdin),
 	]);
 
 	return {
@@ -305,7 +369,48 @@ export async function resolveItemTextInputs(
 		// Validated here rather than at the call sites so every write path gets
 		// the check: a malformed seed is only ever noticed at the login it breaks.
 		totp: totp === undefined ? undefined : normalizeTotpInput(totp),
+		number:
+			number === undefined
+				? undefined
+				: normalizeCardNumber(number, { luhn: inputs.validate !== false }),
+		cvv: cvv === undefined ? undefined : normalizeCvv(cvv),
 	};
+}
+
+/** The {@link TextSource} a family's flags describe, filled from parsed options. */
+function familySource(
+	family: TextInputFamily,
+	inputs: ItemTextInputs,
+	generate?: () => Promise<string>,
+): TextSource {
+	const source: TextSource = {
+		label: family.label,
+		flagNames: sourceFlagNames(family),
+		allowEmpty: family.allowEmpty,
+	};
+
+	for (const flag of family.flags) {
+		const value = inputs[flag.key];
+		switch (flag.kind) {
+			case "inline":
+				source.inline = value as string | undefined;
+				break;
+			case "stdin":
+				source.stdin = value as boolean | undefined;
+				break;
+			case "file":
+				source.file = value as string | undefined;
+				break;
+			case "env":
+				source.env = value as string | undefined;
+				break;
+			case "generate":
+				source.generate = value && generate ? generate : undefined;
+				break;
+		}
+	}
+
+	return source;
 }
 
 export function listExplicitStdinInputs(inputs: ExplicitStdinInputs): string[] {

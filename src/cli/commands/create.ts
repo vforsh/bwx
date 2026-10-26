@@ -19,9 +19,16 @@ import {
 	StdinReader,
 	type ItemTextInputs,
 } from "../input.ts";
+import {
+	assertCardIntent,
+	registerCardOptions,
+	resolveCardPatch,
+	usedCardOnlyFlags,
+	type CardOptionInputs,
+} from "../card-options.ts";
 import { redactGeneratedPassword } from "./generate.ts";
 
-interface CreateOptions extends ItemTextInputs {
+interface CreateOptions extends ItemTextInputs, CardOptionInputs {
 	type: string;
 	name?: string;
 	username?: string;
@@ -35,7 +42,10 @@ interface CreateOptions extends ItemTextInputs {
 	generateLength?: number;
 }
 
-/** Flags a secure note has nowhere to store — see {@link assertLoginFlags}. */
+const ITEM_TYPES = ["login", "note", "card"] as const;
+type CreateItemType = (typeof ITEM_TYPES)[number];
+
+/** Flags only a login has anywhere to store — see {@link assertTypeFlags}. */
 const LOGIN_ONLY_FLAGS: Array<[keyof CreateOptions, string]> = [
 	["username", "--username"],
 	...loginOnlyTextInputFlags(),
@@ -45,11 +55,12 @@ export function registerCreate(program: Command): void {
 	const command = program
 		.command("create").alias("add")
 		.description("Create a new vault item")
-		.option("--type <type>", "Item type: login|note", "note")
+		.option("--type <type>", "Item type: login|note|card", "note")
 		.option("--name <name>", "Item name")
 		.option("--username <user>", "Username (login items only)");
 
-	registerItemTextOptions(command)
+	registerItemTextOptions(command);
+	registerCardOptions(command)
 		.option("--uri <url>", "URI (repeatable)", collect, [])
 		.option("--field <kv>", "Custom field k=v (repeatable)", collect, [])
 		.option("--field-file <kv>", "Custom field value from file k=path (repeatable)", collect, [])
@@ -84,14 +95,16 @@ export function registerCreate(program: Command): void {
 					throw new CliError("--name is required", ExitCode.BadArgs);
 				}
 
-				if (localOpts.type !== "login" && localOpts.type !== "note") {
+				if (!ITEM_TYPES.includes(localOpts.type as CreateItemType)) {
 					throw new CliError(
-						`Invalid type "${localOpts.type}". Valid: login, note`,
+						`Invalid type "${localOpts.type}". Valid: ${ITEM_TYPES.join(", ")}`,
 						ExitCode.BadArgs,
 					);
 				}
+				const type = localOpts.type as CreateItemType;
 
-				assertLoginFlags(localOpts);
+				assertTypeFlags(localOpts, type);
+				assertCardIntent(localOpts);
 
 				const explicitStdinSources = listExplicitStdinInputs({
 					...localOpts,
@@ -126,13 +139,17 @@ export function registerCreate(program: Command): void {
 				});
 
 				const item = buildNewItem({
-					type: localOpts.type,
+					type,
 					name: localOpts.name,
 					notes: notes ?? null,
 					username: localOpts.username ?? null,
 					password: textInputs.password ?? null,
 					totp: textInputs.totp ?? null,
 					uris: localOpts.uri,
+					card:
+						type === "card"
+							? resolveCardPatch(localOpts, textInputs)
+							: undefined,
 					fields,
 					folderId: localOpts.folder
 						? await resolveFolderRef(localOpts.folder, opts)
@@ -160,21 +177,26 @@ export function registerCreate(program: Command): void {
 }
 
 /**
- * A secure note has no login object, so `buildNewItem` drops usernames,
- * passwords, and URIs on the floor. Accepting them silently means a caller can
- * "store" a credential, get exit 0, and end up with an item that never held it.
+ * `buildNewItem` writes only the object the item type has — `login` for a login,
+ * `card` for a card — so any other type's values would be dropped on the floor.
+ * Accepting them silently means a caller can "store" a credential, get exit 0,
+ * and end up with an item that never held it.
  */
-function assertLoginFlags(localOpts: CreateOptions): void {
-	if (localOpts.type === "login") return;
-
-	const used = LOGIN_ONLY_FLAGS.filter(([key]) => Boolean(localOpts[key])).map(
+function assertTypeFlags(localOpts: CreateOptions, type: CreateItemType): void {
+	const login = LOGIN_ONLY_FLAGS.filter(([key]) => Boolean(localOpts[key])).map(
 		([, flag]) => flag,
 	);
-	if (localOpts.uri.length > 0) used.push("--uri");
+	if (localOpts.uri.length > 0) login.push("--uri");
 
-	if (used.length > 0) {
+	const required: Array<[CreateItemType, string[]]> = [
+		["login", login],
+		["card", usedCardOnlyFlags(localOpts)],
+	];
+
+	for (const [needed, used] of required) {
+		if (needed === type || used.length === 0) continue;
 		throw new CliError(
-			`${used.join(", ")} ${used.length > 1 ? "need" : "needs"} --type login (a note cannot store them).`,
+			`${used.join(", ")} ${used.length > 1 ? "need" : "needs"} --type ${needed} (a ${type} cannot store them).`,
 			ExitCode.BadArgs,
 		);
 	}

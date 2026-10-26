@@ -7,7 +7,7 @@ import { withSession } from "../../bw/session.ts";
 import { patchItem, bwEncode } from "../../bw/encoding.ts";
 import { generateSecret } from "../../bw/generate.ts";
 import { resolveFolderRef } from "../../bw/folders.ts";
-import { BwItemType } from "../../bw/types.ts";
+import { BwItemType, itemTypeLabel, type BwCard } from "../../bw/types.ts";
 import {
 	assertSingleStdinSource,
 	collect,
@@ -21,9 +21,18 @@ import {
 	TOTP_FAMILY,
 	type ItemTextInputs,
 } from "../input.ts";
+import {
+	assertCardIntent,
+	registerCardOptions,
+	registerCardRemovalOptions,
+	resolveCardPatch,
+	usedCardOnlyFlags,
+	type CardOptionInputs,
+	type CardRemovalInputs,
+} from "../card-options.ts";
 import { redactGeneratedPassword } from "./generate.ts";
 
-interface EditOptions extends ItemTextInputs {
+interface EditOptions extends ItemTextInputs, CardOptionInputs, CardRemovalInputs {
 	name?: string;
 	username?: string;
 	uri: string[];
@@ -52,8 +61,12 @@ export function registerEdit(program: Command): void {
 		.option("--name <name>", "New name")
 		.option("--username <user>", "New username");
 
-	registerItemTextOptions(command)
-		.option("--rm-totp", "Remove the stored TOTP secret")
+	registerItemTextOptions(command).option(
+		"--rm-totp",
+		"Remove the stored TOTP secret",
+	);
+	registerCardOptions(command);
+	registerCardRemovalOptions(command)
 		.option("--uri <url>", "Set URIs (repeatable, replaces all)", collect, [])
 		.option("--add-field <kv>", "Add/update field k=v", collect, [])
 		.option("--add-field-file <kv>", "Add/update field value from file k=path", collect, [])
@@ -87,8 +100,9 @@ export function registerEdit(program: Command): void {
 					}
 					encoded = bwEncode(stdinText);
 				} else {
-					assertLoginFlags(localOpts, current);
+					assertTypeFlags(localOpts, current);
 					assertTotpIntent(localOpts);
+					assertCardIntent(localOpts);
 
 					assertSingleStdinSource(
 						listExplicitStdinInputs({
@@ -119,6 +133,10 @@ export function registerEdit(program: Command): void {
 						password: textInputs.password,
 						totp: localOpts.rmTotp ? null : textInputs.totp,
 						uris: localOpts.uri.length > 0 ? localOpts.uri : undefined,
+						card:
+							current.type === BwItemType.Card
+								? resolveCardPatch(localOpts, textInputs, current.card as BwCard | null)
+								: undefined,
 						addFields,
 						rmFields: localOpts.rmField,
 						folderId: localOpts.folder
@@ -162,24 +180,29 @@ function assertTotpIntent(localOpts: EditOptions): void {
 }
 
 /**
- * Same trap as `create`: only a login item has somewhere to put a password, so
- * setting one on a note would be accepted and then quietly lost.
+ * Same trap as `create`: only a login has somewhere to put a password and only a
+ * card somewhere to put a card number, so setting either on another type would
+ * be accepted and then quietly lost.
  */
-function assertLoginFlags(
+function assertTypeFlags(
 	localOpts: EditOptions,
 	current: Record<string, unknown>,
 ): void {
-	if (current.type === BwItemType.Login) return;
-
-	const used = LOGIN_ONLY_FLAGS.filter(([key]) => Boolean(localOpts[key])).map(
+	const login = LOGIN_ONLY_FLAGS.filter(([key]) => Boolean(localOpts[key])).map(
 		([, flag]) => flag,
 	);
-	if (localOpts.uri.length > 0) used.push("--uri");
+	if (localOpts.uri.length > 0) login.push("--uri");
 
-	if (used.length === 0) return;
+	const required: Array<[number, string[]]> = [
+		[BwItemType.Login, login],
+		[BwItemType.Card, usedCardOnlyFlags(localOpts)],
+	];
 
-	throw new CliError(
-		`${used.join(", ")} ${used.length > 1 ? "need" : "needs"} a login item, but "${String(current.name)}" is not one.`,
-		ExitCode.BadArgs,
-	);
+	for (const [needed, used] of required) {
+		if (needed === current.type || used.length === 0) continue;
+		throw new CliError(
+			`${used.join(", ")} ${used.length > 1 ? "need" : "needs"} a ${itemTypeLabel(needed)} item, but "${String(current.name)}" is a ${itemTypeLabel(Number(current.type))}.`,
+			ExitCode.BadArgs,
+		);
+	}
 }
