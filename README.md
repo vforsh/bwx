@@ -259,6 +259,31 @@ process](#secrets-into-a-child-process):
 bwx run --env NUM=number:Visa --env CVV=cvv:Visa --env EXP=expiry:Visa -- ./pay.sh
 ```
 
+Storing a card:
+
+```bash
+bwx create --type card --name "Visa Work" --cardholder "Vladislav Forsh" \
+  --expiry 08/29 --number-stdin --cvv-env CARD_CVV < number.txt
+bwx edit "Visa Work" --expiry 09/31 --cvv-stdin   # changes only these fields
+bwx edit "Visa Work" --rm-cvv --rm-brand
+```
+
+The number and CVV take the same sources as a password (`--number`, `--number-stdin`,
+`--number-file`, `--number-env`; `--cvv*` likewise). Values are checked before the write
+and errors never echo them:
+
+- Number: spaces and dashes are stripped, then it must be digits and pass a Luhn check
+  (`--no-validate` skips Luhn for test or private-label numbers).
+- CVV: 3–4 digits.
+- Expiry: `--expiry MM/YY|MM/YYYY`, or `--exp-month 1-12` / `--exp-year YYYY`; a two-digit
+  year becomes `20YY`.
+- Brand: any casing of `Visa`, `Mastercard`, `Amex`, `Discover`, `Diners Club`, `JCB`,
+  `Maestro`, `UnionPay`, `RuPay`, `Mir`, `Other`. Omitted, it is inferred from the number
+  when the prefix is unambiguous — on `edit`, only onto a card that has no brand yet.
+
+`edit` clears with `--rm-number`, `--rm-cvv`, `--rm-cardholder`, `--rm-brand`,
+`--rm-expiry`. Card flags on a non-card item, and login flags on a card, are usage errors.
+
 ### Listings are capped
 
 Listings stop at 50 items by default — an uncapped `bwx list` returns the whole vault,
@@ -321,15 +346,16 @@ The check is cached in `~/.config/bwx/state.json`, so a fresh vault costs no ext
 
 | Command | Description |
 |---------|-------------|
-| `bwx create` | Create item (`--type`, `--name`, `--username`, `--password-stdin`, `--totp-env`, `--field-file k=path`) |
-| `bwx edit <item>` | Edit item (`--name`, `--password-env`, `--totp`, `--rm-totp`, `--add-field-file k=path`, `--rm-field name`) |
+| `bwx create` | Create item (`--type login\|note\|card`, `--name`, `--username`, `--password-stdin`, `--totp-env`, `--number-stdin`, `--cvv-env`, `--expiry`, `--field-file k=path`) |
+| `bwx edit <item>` | Edit item (`--name`, `--password-env`, `--totp`, `--rm-totp`, `--expiry`, `--cvv-stdin`, `--rm-cvv`, `--add-field-file k=path`, `--rm-field name`) |
 | `bwx delete <item>` | Delete item (`--permanent`, `--force`) |
 | `bwx restore <item>` | Restore an item from the trash |
 | `bwx generate` | Generate a password or passphrase (local, no vault access) |
 
 Login-only flags (`--username`, any `--password-*` or `--totp-*`, `--uri`) require a login
-item. A secure note has nowhere to put them, so passing them to one is an error rather
-than an exit 0 over a credential that was silently dropped.
+item, and card flags (`--cardholder`, `--brand`, `--expiry`, `--exp-*`, `--number*`, `--cvv*`,
+`--rm-*` for them) a card item. Any other type has nowhere to put them, so passing them is
+an error rather than an exit 0 over a value that was silently dropped.
 
 `bwx delete` requires `--force` whenever it is not talking to a terminal. The confirmation
 prompt cannot render for a script or an agent, so without it `--force` would be decorative
@@ -386,6 +412,8 @@ Supported source flags:
 
 - Passwords: `--password-stdin`, `--password-file <path>`, `--password-env <name>`
 - TOTP secrets: `--totp-stdin`, `--totp-file <path>`, `--totp-env <name>`
+- Card numbers: `--number-stdin`, `--number-file <path>`, `--number-env <name>`
+- CVVs: `--cvv-stdin`, `--cvv-file <path>`, `--cvv-env <name>`
 - Notes: `--notes-file <path>`
 - Create fields: `--field-file k=path`, `--field-env k=ENV`
 - Edit fields: `--add-field-file k=path`, `--add-field-env k=ENV`

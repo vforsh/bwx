@@ -41,6 +41,7 @@ bwx create --name "API Key" --notes "sk_live_abc123" --field account=acme
 printf '%s' "$TOKEN" | bwx create --type login --name "GitHub" --username user --password-stdin --uri https://github.com
 bwx create --name "Acme" --field-file '!API Key=./token.txt' --field-env account=ACME_ACCOUNT
 echo "secret" | bwx create --name "Piped Note"
+bwx create --type card --name "Visa Work" --cardholder "Vladislav Forsh" --expiry 08/29 --number-env CARD_NUM --cvv-env CARD_CVV
 ```
 
 ## Commands
@@ -217,10 +218,10 @@ Downloads an attachment by ID or filename. Defaults to saving as the attachment 
 
 ### `bwx create [options]`
 
-Flags: `--type login|note`, `--name`, `--notes`, `--notes-file`, `--username`, `--password`, `--password-stdin`, `--password-file`, `--password-env`, `--password-generate`, `--generate-length <n>`, `--totp`, `--totp-stdin`, `--totp-file`, `--totp-env`, `--uri` (repeatable), `--field k=v` (repeatable), `--field-file k=path`, `--field-env k=ENV`, `--folder <name|id>`, `--favorite`, `--from-json`
+Flags: `--type login|note|card`, `--name`, `--notes`, `--notes-file`, `--username`, `--password`, `--password-stdin`, `--password-file`, `--password-env`, `--password-generate`, `--generate-length <n>`, `--totp`, `--totp-stdin`, `--totp-file`, `--totp-env`, `--uri` (repeatable), card flags (below), `--field k=v` (repeatable), `--field-file k=path`, `--field-env k=ENV`, `--folder <name|id>`, `--favorite`, `--from-json`
 
-`--username`, any `--password-*` or `--totp-*`, and `--uri` require `--type login`; a note
-cannot hold them and passing them to one is now an error rather than a silent drop.
+`--username`, any `--password-*` or `--totp-*`, and `--uri` require `--type login`; card
+flags require `--type card`. Passing either to another type is an error, not a silent drop.
 
 Field syntax: `k=v` (text), `!k=v` (hidden), `bool:k=v` (boolean). The same key syntax works for `--field-file` and `--field-env`, where the value is a path or environment variable name. Stdin is read as `--notes` when piped; prefer `--password-stdin` for login passwords.
 
@@ -232,7 +233,22 @@ bwx edit "API Key" --add-field region=us-east-1
 printf '%s' "$TOKEN" | bwx edit "GitHub" --password-stdin --uri https://github.com
 bwx edit "Note" --rm-field old-key
 ```
-Flags: `--name`, `--notes`, `--notes-file`, `--username`, `--password`, `--password-stdin`, `--password-file`, `--password-env`, `--password-generate`, `--generate-length <n>`, `--totp`, `--totp-stdin`, `--totp-file`, `--totp-env`, `--rm-totp`, `--uri` (replaces all), `--add-field k=v`, `--add-field-file k=path`, `--add-field-env k=ENV`, `--rm-field name`, `--folder <name|id>` (`none` unfiles), `--favorite/--no-favorite`, `--from-json`
+Flags: `--name`, `--notes`, `--notes-file`, `--username`, `--password`, `--password-stdin`, `--password-file`, `--password-env`, `--password-generate`, `--generate-length <n>`, `--totp`, `--totp-stdin`, `--totp-file`, `--totp-env`, `--rm-totp`, `--uri` (replaces all), `--add-field k=v`, `--add-field-file k=path`, `--add-field-env k=ENV`, `--rm-field name`, `--folder <name|id>` (`none` unfiles), `--favorite/--no-favorite`, `--from-json`, card flags and `--rm-number|cvv|cardholder|brand|expiry` (card items only)
+
+### Storing a card
+
+```bash
+bwx create --type card --name "Visa Work" --cardholder "Vladislav Forsh" --brand Visa \
+  --expiry 08/29 --number-stdin --cvv-env CARD_CVV < number.txt
+bwx edit "Visa Work" --expiry 09/31 --cvv-stdin   # merges; other fields untouched
+bwx edit "Visa Work" --rm-cvv --rm-brand
+```
+
+Card flags: `--cardholder`, `--brand` (case-insensitive: Visa, Mastercard, Amex, Discover,
+Diners Club, JCB, Maestro, UnionPay, RuPay, Mir, Other; inferred from the number if
+omitted), `--expiry MM/YY|MM/YYYY` or `--exp-month`/`--exp-year`, `--number[-stdin|-file|-env]`,
+`--cvv[-stdin|-file|-env]`. Number must pass Luhn (`--no-validate` skips it); CVV is 3–4
+digits. Errors never echo the number or CVV.
 
 ### Storing a TOTP secret
 
